@@ -1,0 +1,22 @@
+[project]
+name = "askq-backend"
+version = "0.1.0"
+description = "ASKQ - Ask Questions to your Data: secure NL-to-SQL backend with CAIR"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+# assert is the normal way to write pytest tests
+"tests/**" = ["S101"]

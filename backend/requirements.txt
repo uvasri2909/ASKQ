@@ -1,0 +1,25 @@
+# ASKQ backend runtime dependencies (pinned).
+# Transitive versions are captured in requirements.lock (pip freeze).
+
+# Web framework
+fastapi==0.141.1
+uvicorn[standard]==0.54.0
+pydantic==2.13.5
+pydantic-settings==2.15.0
+python-multipart==0.0.32
+
+# Database (MySQL 8 via pure-Python driver; cryptography is required for
+# MySQL 8's default caching_sha2_password authentication)
+sqlalchemy==2.1.1
+pymysql==1.2.3
+cryptography==50.0.1
+
+# SQL parsing / validation (used from Phase 5 onward)
+sqlglot==30.19.0
+
+# Claude API (used from Phase 6 onward)
+anthropic==1.8.0
+
+# Auth (used from Phase 4 onward)
+pyjwt==2.15.0
+pwdlib[argon2]==0.3.1

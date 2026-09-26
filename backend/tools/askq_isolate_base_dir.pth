@@ -1,0 +1,1 @@
+import sys, os; _b = os.path.normcase(os.path.abspath(sys.base_prefix)); sys.path[:] = [p for p in sys.path if os.path.normcase(os.path.abspath(p)) != _b]; del _b
