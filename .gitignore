@@ -33,6 +33,8 @@ logs/
 # ---- Database dumps / generated data ----
 *.sql.gz
 database/dumps/
+# Seed SQL is regenerated deterministically by database/seed/generate_seed.py
+database/seed/generated/
 
 # ---- Editors / OS ----
 .vscode/*

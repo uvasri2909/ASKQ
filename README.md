@@ -6,8 +6,8 @@ enforces role-based access control, and runs **CAIR** (Conversation-Aware Infere
 Risk) analysis. CAIR detects when a *sequence* of individually harmless queries could
 reveal sensitive information. Only then is the query executed.
 
-> **Status:** Phase 1 of 14 (project scaffold and development environment).
-> Authentication, RBAC, CAIR, Claude integration and the database schema are not implemented yet.
+> **Status:** Phase 2 of 14 (MySQL schema and deterministic synthetic data).
+> Authentication, RBAC, CAIR and Claude integration are not implemented yet.
 
 See [docs/architecture.md](docs/architecture.md) for the design.
 
@@ -17,7 +17,7 @@ See [docs/architecture.md](docs/architecture.md) for the design.
 ASKQ/
 ├── backend/     FastAPI application (Python 3.13)
 ├── frontend/    React + Vite + TypeScript dashboard
-├── database/    MySQL schema and synthetic-data generator
+├── database/    MySQL schema, synthetic-data generator, DB accounts (see database/README.md)
 └── docs/        Architecture, CAIR design, attack scenarios, evaluation
 ```
 
@@ -27,7 +27,7 @@ ASKQ/
 |---|---|
 | Python | 3.13 |
 | Node.js | 24 (npm 11) |
-| MySQL Server | 8.0 (needed from Phase 2) |
+| MySQL Server | 8.0 |
 | Git | 2.x |
 
 ## Setup (Windows PowerShell)
@@ -47,6 +47,10 @@ cd ..
 cd frontend
 npm install
 cd ..
+
+# 4. Databases: first set DB_READER_PASSWORD / DB_APP_PASSWORD in .env and
+#    create the askq_admin login path (both explained in database\README.md)
+powershell -ExecutionPolicy Bypass -File .\database\setup_db.ps1
 ```
 
 ## Running
@@ -82,6 +86,10 @@ cd C:\ASKQ\frontend
 npm test
 npm run lint
 npm run build
+
+# Databases (rebuild from scratch; asks for confirmation)
+cd C:\ASKQ
+.\database\setup_db.ps1 -Reset
 ```
 
 ## Troubleshooting
