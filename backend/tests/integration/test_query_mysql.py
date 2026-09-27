@@ -198,8 +198,10 @@ def test_catalog_matches_live_tables_and_views(database, settings):
 def test_admin_sees_the_whole_university(env):
     body = env.ask(Role.ADMIN, "SELECT COUNT(*) AS n FROM students")
     assert body["decision"] == "ALLOW" and body["rows"] == [[1000]]
-    assert _ran_on_reader(env, body["sql"])
-    assert not any(body["sql"] in s for s in env.app_statements)
+    executed = env.history(body["query_id"]).executed_sql
+    assert "sql" not in body
+    assert _ran_on_reader(env, executed)
+    assert not any(executed in s for s in env.app_statements)
 
 
 def test_hod_sees_only_their_department(env, database):
@@ -258,7 +260,8 @@ def test_like_patterns_are_not_treated_as_parameters(env, database):
 
 def test_results_are_bounded(env):
     body = env.ask(Role.ADMIN, "SELECT attendance_id FROM attendance_records")
-    assert body["row_count"] == 500 and body["sql"].endswith("LIMIT 500")
+    assert body["row_count"] == 500
+    assert env.history(body["query_id"]).executed_sql.endswith("LIMIT 500")
 
 
 # ---------- every final_status satisfies the Phase 2 CHECK constraints ----------
@@ -342,5 +345,6 @@ def test_statement_timeout_is_enforced(slow_env):
         "SELECT COUNT(*) AS n FROM attendance_records a "
         "JOIN attendance_records b ON a.status = b.status",
     )
-    assert body["decision"] == "FAILED" and body["reason_code"] == "QUERY_TIMEOUT"
-    assert slow_env.history(body["query_id"]).failure_stage == "EXECUTION"
+    assert body["decision"] == "FAILED" and "reason_code" not in body
+    row = slow_env.history(body["query_id"])
+    assert (row.failure_stage, row.error_code) == ("EXECUTION", "QUERY_TIMEOUT")

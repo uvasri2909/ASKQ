@@ -28,25 +28,38 @@ class QueryRequest(BaseModel):
 
 
 class SecuritySummary(BaseModel):
+    """High-level outcome of each check, safe to show any user.
+
+    Deliberately absent: the risk score, detector findings, reason codes and
+    anything CAIR computed about populations (they would let a client probe
+    thresholds or learn what was withheld).
+    """
+
     validation: str | None = Field(description="PASSED | REJECTED, or null if not reached")
     authorization: str | None = Field(description="ALLOWED | REWRITTEN | DENIED, or null")
     guard_decision: str | None = Field(description="ALLOW | RESTRICT | BLOCK, or null")
-    risk_score: float | None
     guard_reasons: list[str]
     scope: ScopeKind
     notes: list[str]
 
 
 class QueryResponse(BaseModel):
+    """What a caller learns about their question.
+
+    Never the SQL (generated or executed) nor the internal reason code: the SQL
+    of a statistical or restricted answer carries the minimum group size and
+    the predicates that exclude withheld groups, and codes name the check that
+    fired. Both stay in askq_system.query_history (executed_sql, error_code)
+    for audit and evaluation tooling.
+    """
+
     query_id: int
     conversation_id: str
     decision: Decision
     message: str
-    reason_code: str | None
     question: str
     resolved_question: str | None
     explanation: str | None
-    sql: str | None = Field(description="The SQL that was executed (null if nothing ran)")
     columns: list[str]
     rows: list[list[Any]]
     row_count: int

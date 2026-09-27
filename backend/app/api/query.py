@@ -12,12 +12,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.cair.guard import CairGuard
+from app.cair.guard import PUBLIC_REASONS, RECORD_REASON, CairGuard
 from app.db.session import get_app_session
 from app.errors import ErrorResponse
 from app.llm.claude import ClaudeSqlGenerator
 from app.llm.sql_generator import SqlGenerator
-from app.query.decision import InferenceGuard, PassThroughGuard
+from app.query.decision import PASSTHROUGH_REASON, InferenceGuard, PassThroughGuard
 from app.query.executor import ReaderExecutor
 from app.query.schemas import QueryRequest, QueryResponse, SecuritySummary
 from app.query.service import ConversationNotFound, QueryOutcome, QueryService
@@ -69,6 +69,12 @@ def get_query_service(
     )
 
 
+# The only guard reasons a caller may see: fixed sentences that say nothing about
+# detectors, thresholds, populations or what was withheld. Anything else a guard
+# returns (e.g. a future guard's diagnostic text) is dropped, not forwarded.
+PUBLIC_GUARD_REASONS = frozenset({*PUBLIC_REASONS.values(), RECORD_REASON, PASSTHROUGH_REASON})
+
+
 def _response(outcome: QueryOutcome, user: UserContext) -> QueryResponse:
     result = outcome.result
     guard = outcome.guard
@@ -77,11 +83,9 @@ def _response(outcome: QueryOutcome, user: UserContext) -> QueryResponse:
         conversation_id=outcome.conversation_id,
         decision=outcome.decision,
         message=outcome.message,
-        reason_code=outcome.reason_code,
         question=outcome.question,
         resolved_question=outcome.resolved_question,
         explanation=outcome.explanation,
-        sql=outcome.executed_sql,
         columns=result.columns if result else [],
         rows=result.rows if result else [],
         row_count=result.row_count if result else 0,
@@ -92,9 +96,7 @@ def _response(outcome: QueryOutcome, user: UserContext) -> QueryResponse:
             validation=outcome.validation_status,
             authorization=outcome.authorization_status,
             guard_decision=guard.decision.value if guard else None,
-            # CAIR does not disclose its score: thresholds must not be probeable.
-            risk_score=guard.risk_score if guard and guard.disclose else None,
-            guard_reasons=list(guard.reasons) if guard else [],
+            guard_reasons=[r for r in guard.reasons if r in PUBLIC_GUARD_REASONS] if guard else [],
             scope=user.scope.kind,
             notes=outcome.notes,
         ),

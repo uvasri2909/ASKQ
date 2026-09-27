@@ -6,11 +6,11 @@ enforces role-based access control, and runs **CAIR** (Conversation-Aware Infere
 Risk) analysis. CAIR detects when a *sequence* of individually harmless queries could
 reveal sensitive information. Only then is the query executed.
 
-> **Status:** Phase 5 of 14 (CAIR: conversation-aware inference risk).
-> The frontend is not implemented yet.
+> **Status:** Phase 6 of 14 (web frontend and end-to-end application).
 
 See [docs/architecture.md](docs/architecture.md) for the design,
-[backend/README.md](backend/README.md) for the API, authentication and RBAC, and
+[backend/README.md](backend/README.md) for the API, authentication and RBAC,
+[frontend/README.md](frontend/README.md) for the web app, and
 [database/README.md](database/README.md) for the databases.
 
 ## Project layout
@@ -79,7 +79,15 @@ cd C:\ASKQ\frontend
 npm run dev
 ```
 
-The page shows **Backend status: Online** when both are running.
+Open http://localhost:5173 and sign in with a user that has a password (step 5
+of the setup). The login page shows **Server: online** when the backend is up.
+The dev server proxies `/api` and `/health` to the backend, so the browser only
+ever talks to one origin. Asking questions needs a real `ANTHROPIC_API_KEY` in
+`.env`; with the placeholder key, `/api/v1/query` answers
+`503 Service temporarily unavailable` and the app shows that message.
+
+Signing in keeps the access token in memory only (never `localStorage` or
+cookies), so reloading the page signs you out.
 
 ## Tests and checks
 
@@ -95,6 +103,7 @@ cd C:\ASKQ\backend
 cd C:\ASKQ\frontend
 npm test
 npm run lint
+npm run typecheck
 npm run build
 
 # Databases (rebuild from scratch; asks for confirmation)
@@ -124,6 +133,9 @@ cd C:\ASKQ
 - The backend uses two MySQL accounts that are never merged: `askq_app` for its own
   data and `askq_reader` (read-only) for organisational data.
 - LLM-generated SQL is never executed without validation, authorization and CAIR checks.
+- The web app only displays what the backend decided. It sends the question (and
+  a conversation id) and nothing else: no role, scope, SQL or security decision.
+  It never shows SQL, risk scores or raw errors, and renders every value as text.
 - CAIR is a heuristic, explainable risk detector, not a formal privacy guarantee.
   See [docs/cair.md](docs/cair.md) and [docs/attack-scenarios.md](docs/attack-scenarios.md);
   run the scenario evaluation with `backend\.venv\Scripts\python -m app.evaluation`.

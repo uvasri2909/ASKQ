@@ -213,6 +213,12 @@ def rows_of(db, model):
         return list(s.scalars(select(model)))
 
 
+def stored(db, body) -> QueryHistory:
+    """The audit row behind a response: the SQL and reason code live only here."""
+    with db.app_session() as s:
+        return s.get(QueryHistory, body["query_id"])
+
+
 # ---------------- statistical tier: ALLOW ----------------
 
 
@@ -220,8 +226,9 @@ def test_university_statistic_is_allowed_and_recorded(ask, cair_db):
     body = ask(ACCOUNTS.hod, BY_DEPT).json()
     assert body["decision"] == "ALLOW", body
     assert sorted(body["rows"]) == [["CSE", 12], ["ECE", 12], ["ME", 6]]
-    assert "HAVING COUNT(DISTINCT s.student_id) >= 5" in body["sql"]
-    assert body["security"]["risk_score"] is None  # never disclosed
+    # The k threshold is enforced in the SQL, which is audited but never returned.
+    assert "sql" not in body and "risk_score" not in body["security"]
+    assert "HAVING COUNT(DISTINCT s.student_id) >= 5" in stored(cair_db, body).executed_sql
     assert body["security"]["guard_reasons"] == ["No inference risk was found for this statistic."]
     (row,) = history(cair_db)
     assert (row.final_status, row.authorization_status, row.cair_decision) == (
@@ -266,8 +273,8 @@ def test_differencing_is_blocked_and_never_reaches_the_reader(ask, cair_db, read
     reader_spy.statements.clear()
     body = ask(ACCOUNTS.hod, MARKS_ECE_NOT_X).json()
     assert body["decision"] == "BLOCK"
-    assert body["reason_code"] == "INFERENCE_RISK"
-    assert body["rows"] == [] and body["sql"] is None
+    assert stored(cair_db, body).error_code == "INFERENCE_RISK"
+    assert body["rows"] == [] and "sql" not in body and "reason_code" not in body
     # CAIR's own population probes ran; the query itself did not.
     assert not any(s.startswith("SELECT AVG(g.marks)") for s in reader_spy.statements)
     blocked = history(cair_db)[-1]
@@ -299,7 +306,8 @@ def test_block_responses_are_uniform(ask):
     none = ask(ACCOUNTS.hod, "SELECT COUNT(*) AS n FROM students s WHERE s.gender = 'Z'")
     a, b = one.json(), none.json()
     assert a["decision"] == b["decision"] == "BLOCK"
-    for key in ("message", "reason_code", "rows", "sql", "row_count", "execution_ms", "chart"):
+    assert a.keys() == b.keys()
+    for key in ("message", "rows", "row_count", "execution_ms", "chart"):
         assert a[key] == b[key], key
     assert a["security"] == b["security"]
 
@@ -313,8 +321,11 @@ def test_restrict_withholds_the_implicated_group_and_is_reauthorized(ask, cair_d
     assert body["decision"] == "RESTRICT", body
     assert sorted(r[0] for r in body["rows"]) == ["CSE", "ME"]
     # Withheld group + the statistical tier's own minimum-size rule, re-applied.
-    assert "NOT (d.department_code = 'ECE')" in body["sql"]
-    assert "COUNT(DISTINCT e.student_id) >= 5" in body["sql"]
+    executed = stored(cair_db, body).executed_sql
+    assert "NOT (d.department_code = 'ECE')" in executed
+    assert "COUNT(DISTINCT e.student_id) >= 5" in executed
+    # ...but nothing in the response names the withheld group or the rule.
+    assert "sql" not in body and "ECE" not in str(body) and ">= 5" not in str(body)
     assert body["security"]["guard_reasons"] == [
         "Part of the result was withheld to protect individuals."
     ]
@@ -327,7 +338,7 @@ def test_restrict_withholds_the_implicated_group_and_is_reauthorized(ask, cair_d
 # ---------------- authorization is untouched ----------------
 
 
-def test_unauthorized_is_still_denied_whatever_cair_would_say(ask):
+def test_unauthorized_is_still_denied_whatever_cair_would_say(ask, cair_db):
     teacher_fees = ask(ACCOUNTS.teacher, "SELECT SUM(amount) FROM fees", population="scope")
     assert teacher_fees.json()["decision"] == "DENIED"
     names = ask(ACCOUNTS.hod, "SELECT first_name, COUNT(*) FROM students GROUP BY first_name")
@@ -335,13 +346,13 @@ def test_unauthorized_is_still_denied_whatever_cair_would_say(ask):
     targeted = ask(ACCOUNTS.hod, "SELECT COUNT(*) FROM students WHERE student_id = 601")
     assert targeted.json()["decision"] == "DENIED"
     records = ask(ACCOUNTS.hod, "SELECT gender FROM students")  # rows, not an aggregate
-    assert records.json()["reason_code"] == "STATISTICS_AGGREGATE_ONLY"
+    assert stored(cair_db, records.json()).error_code == "STATISTICS_AGGREGATE_ONLY"
 
 
 def test_admin_questions_stay_in_the_record_tier(ask, cair_db):
     body = ask(ACCOUNTS.admin, "SELECT COUNT(*) AS n FROM students s").json()
     assert body["decision"] == "ALLOW" and body["rows"] == [[30]]
-    assert "HAVING" not in body["sql"]
+    assert "HAVING" not in stored(cair_db, body).executed_sql
     assert rows_of(cair_db, CairAssessment)[-1].reasons["tier"] == "RECORD"
     assert rows_of(cair_db, CairLedgerEntry) == []
 

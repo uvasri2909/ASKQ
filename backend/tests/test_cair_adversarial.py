@@ -32,6 +32,7 @@ from tests.test_cair_api import (  # noqa: F401  (pytest fixtures)
     cclient,
     gen,
     reader_spy,
+    stored,
 )
 from tests.test_query_api import Spy
 
@@ -60,9 +61,10 @@ def sorted_rows(body):
 # ====================================================================
 
 
-def test_group_of_4_is_refused(ask):
+def test_group_of_4_is_refused(ask, cair_db):
     body = ask(HOD, count("d.department_code = 'ME' AND s.gender = 'F'")).json()
-    assert (body["decision"], body["reason_code"], body["rows"]) == ("BLOCK", "INFERENCE_RISK", [])
+    assert (body["decision"], body["rows"]) == ("BLOCK", [])
+    assert stored(cair_db, body).error_code == "INFERENCE_RISK"
 
 
 def test_group_of_5_is_permitted(ask):
@@ -101,7 +103,8 @@ def test_zero_result_and_small_groups_look_the_same(ask):
     four = ask(HOD, count("d.department_code = 'ME' AND s.gender = 'F'")).json()
     one = ask(HOD, count("s.gender = 'X'")).json()
     zero = ask(HOD, count("s.gender = 'Z'")).json()
-    fields = ("decision", "message", "reason_code", "rows", "sql", "row_count", "execution_ms")
+    assert four.keys() == one.keys() == zero.keys()
+    fields = ("decision", "message", "rows", "row_count", "execution_ms")
     assert {tuple(str(b[f]) for f in fields) for b in (four, one, zero)} == {
         tuple(str(four[f]) for f in fields)
     }
@@ -305,10 +308,11 @@ def test_nullable_metric_gets_is_not_null():
 @pytest.mark.parametrize(
     "name", ["CASE inside AVG", "LEFT JOIN with ON filter", "uncorrelated WHERE oracle", "CTE"]
 )
-def test_bypass_is_denied_end_to_end_and_never_executed(ask, reader_spy, name):
+def test_bypass_is_denied_end_to_end_and_never_executed(ask, cair_db, reader_spy, name):
     body = ask(HOD, BYPASSES[name]).json()
-    assert body["decision"] == "DENIED" and body["rows"] == [] and body["sql"] is None
-    assert body["reason_code"].startswith("STATISTICS_") or "NOT_PERMITTED" in body["reason_code"]
+    assert body["decision"] == "DENIED" and body["rows"] == [] and "sql" not in body
+    code = stored(cair_db, body).error_code
+    assert code.startswith("STATISTICS_") or "NOT_PERMITTED" in code
     assert reader_spy.statements == []  # not even a CAIR probe ran
 
 
@@ -386,7 +390,7 @@ def _boom(*args, **kwargs):
 def test_cair_failures_fail_closed(ask, cair_db, reader_spy, monkeypatch, owner, name):
     monkeypatch.setattr(owner, name, _boom)
     body = ask(HOD, ECE_M).json()
-    assert body["decision"] == "FAILED" and body["rows"] == [] and body["sql"] is None
+    assert body["decision"] == "FAILED" and body["rows"] == [] and "sql" not in body
     assert "forced" not in body["message"]
     assert not any(s.startswith("SELECT COUNT(*) AS n") for s in reader_spy.statements)
     with cair_db.app_session() as s:

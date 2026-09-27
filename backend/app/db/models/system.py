@@ -83,6 +83,7 @@ class ConversationTurn(Base):
     turn_no: Mapped[int] = mapped_column(Integer)
     question: Mapped[str] = mapped_column(Text)
     answer_summary: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class QueryHistory(Base):

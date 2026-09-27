@@ -71,7 +71,10 @@ app/
 | GET | `/health/db` | none | `SELECT 1` through each account. `200 {"status":"ok","checks":{"app":"ok","reader":"ok"}}`, or `503` with `"unavailable"` per failed check. No host, user, version or error text. |
 | POST | `/api/v1/auth/login` | none | `{"username","password"}` → `{"access_token","token_type":"bearer","expires_in","user":{id,username,role,permissions}}` |
 | GET | `/api/v1/auth/me` | Bearer | `{id, username, role, permissions}` for the caller, re-read from the database |
-| POST | `/api/v1/query` | Bearer + `ASK_QUESTIONS` | `{"question", "conversation_id"?}` → the decision, the executed SQL, columns/rows, chart hint and a security summary. See "Query pipeline". |
+| POST | `/api/v1/query` | Bearer + `ASK_QUESTIONS` | `{"question", "conversation_id"?}` → the decision, a safe message, columns/rows, chart hint and a high-level security summary. Never SQL, risk scores or reason codes (see "What a response may contain"). See "Query pipeline". |
+| GET | `/api/v1/conversations` | Bearer + `VIEW_OWN_HISTORY` | The caller's active conversations, newest activity first: `{"items":[{id,title,started_at,last_activity_at,turns}],"page":{limit,offset}}`. `limit` 1–100 (default 20), `offset` ≥ 0. |
+| GET | `/api/v1/conversations/{id}` | Bearer + `VIEW_OWN_HISTORY` | One of the caller's conversations: `{id,title,started_at,turns:[{turn_no,question,summary,decision,asked_at}]}`. Another user's or an unknown id: the same `404`. |
+| GET | `/api/v1/history` | Bearer + `VIEW_OWN_HISTORY` | The caller's own questions, newest first: `{"items":[{query_id,conversation_id,turn_no,question,summary,decision,row_count,asked_at}],"page":{...}}`. `limit` 1–100 (default 50). |
 | GET | `/docs`, `/openapi.json` | none | Interactive docs (disabled when `APP_ENV=production`) |
 
 ## Configuration
@@ -339,6 +342,31 @@ All of these are `200` responses carrying the decision. HTTP errors are
 reserved for the request itself: 401/403/404/422, and 503 when Claude or the
 database is not configured.
 
+**What a response may contain (Phase 6).** Everything in the body is visible in
+the browser's network inspector, so the response is limited to:
+`query_id`, `conversation_id`, `decision`, `message`, `question`,
+`resolved_question`, `explanation`, `columns`, `rows`, `row_count`, `row_limit`,
+`execution_ms`, `chart`, and `security` = `{validation, authorization,
+guard_decision, guard_reasons, scope, notes}`.
+- **No SQL, for any decision.** The executed SQL of a statistical answer
+  contains the minimum group size (`HAVING COUNT(DISTINCT …) >= k`); for RESTRICT
+  it contains the predicate that excludes the withheld group
+  (`NOT (d.department_code = …)`); for the record tier it shows the scope
+  rewrite. None of it is needed to read the answer, so the field was removed
+  from the schema (not just hidden by the UI).
+- **No risk score and no reason code.** The score would let a client probe
+  CAIR's thresholds; codes such as `INFERENCE_RISK`, `STATISTICS_…` or
+  `COLUMN_NOT_PERMITTED` name the check that fired. The `message` stays.
+- **Allowlisted guard reasons.** `guard_reasons` only ever contains fixed public
+  sentences (`PUBLIC_GUARD_REASONS` in `app/api/query.py`); anything else a
+  guard returns is dropped.
+- **Where the detail lives:** `query_history.generated_sql`, `executed_sql`,
+  `risk_score` and `error_code`, plus `cair_assessments`/`cair_audit_findings`,
+  for audit and for the evaluation harness (`python -m app.evaluation`). No API
+  endpoint returns them.
+- **Tests:** `tests/test_response_privacy.py` checks every decision (produced
+  by the real CAIR guard), a guard that tries to disclose, and the OpenAPI schema.
+
 **History.** One `query_history` row per question, through `askq_app`:
 - **Turns:** each question is a `conversation_turns` row. Conversations are the
   caller's own; anyone else's conversation id is a 404.
@@ -363,6 +391,17 @@ It does not reason across queries. Inference from sequences of individually
 allowed answers (differencing, narrowing, arithmetic recovery, cross-view
 linking, refusal side channels, context carry-over) is CAIR's job (Phase 5),
 behind the guard interface above.
+
+## Conversations and history (Phase 6)
+
+`app/api/history.py` → `app/db/repositories/history.py`. Read-only SELECTs on
+`askq_system` through the `askq_app` session (never the reader), always filtered
+by the caller's `user_id`, so another user's conversation is indistinguishable
+from a missing one (`404 Conversation not found.`). Only the question, the stored
+summary, the decision (mapped back from `final_status`), the row count and times
+are returned. Never the SQL, risk score, reason codes, CAIR findings or rows.
+Nothing is written, so the append-only history is untouched. Tests:
+`tests/test_history_api.py`, `tests/integration/test_history_mysql.py`.
 
 ## Errors
 

@@ -83,8 +83,8 @@ class GuardResult:
     assessment: dict[str, Any] | None = None  # stored as cair_assessments.reasons
     ledger: dict[str, Any] | None = None  # stored as a cair_ledger_entries descriptor
     population_fingerprint: str | None = None
-    # False: the response shows neither the score nor internal reasons
-    # (thresholds and detector outcomes must not be probeable).
+    # False: the guard's score is not for display. Since Phase 6 the API never
+    # returns a score at all, and only allowlisted public reasons.
     disclose: bool = True
 
     def __post_init__(self) -> None:
@@ -100,6 +100,9 @@ class InferenceGuard(Protocol):
     def assess(self, request: GuardInput) -> GuardResult: ...
 
 
+PASSTHROUGH_REASON = "Inference-risk analysis (CAIR) is not enabled in this version."
+
+
 class PassThroughGuard:
     """Phase 4 placeholder: records that no inference analysis ran."""
 
@@ -110,5 +113,5 @@ class PassThroughGuard:
             decision=Decision.ALLOW,
             risk_score=0.0,
             policy_version=self.policy_version,
-            reasons=("Inference-risk analysis (CAIR) is not enabled in this version.",),
+            reasons=(PASSTHROUGH_REASON,),
         )

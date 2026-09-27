@@ -214,11 +214,15 @@ size, before it may run. The guard's output is never trusted to be narrower.
 ## Refusal uniformity
 
 - **One BLOCK message:** every CAIR BLOCK has the same message and reason code
-  (`INFERENCE_RISK`), empty rows, no SQL and no timing, whichever audit fired.
+  (`INFERENCE_RISK`, stored in `query_history.error_code`; since Phase 6 no
+  reason code is returned to the client), empty rows, no SQL and no timing,
+  whichever audit fired.
   A 0-person and a 1-person group get identical responses; the tests compare
   them field by field.
-- **No score or reasons:** the response carries neither the risk score nor the
-  internal reasons. `guard_reasons` is one fixed sentence per decision. Detector
+- **No score, reasons or SQL:** the response carries neither the risk score nor
+  the internal reasons. Since Phase 6 it carries no SQL either, because a
+  statistical query's SQL states k and a RESTRICT query's SQL names the withheld
+  group. Guard reasons pass an allowlist. `guard_reasons` is one fixed sentence per decision. Detector
   outcomes, thresholds and evidence are stored server-side only (in
   `cair_audit_findings` and the logs).
 - **k is not stated:** the statistical tier's note never states k.

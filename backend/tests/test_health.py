@@ -32,4 +32,8 @@ def test_docs_available_outside_production(client):
         "/api/v1/auth/login",
         "/api/v1/auth/me",
         "/api/v1/query",
+        # Phase 6: the caller's own conversations and history (read-only).
+        "/api/v1/conversations",
+        "/api/v1/conversations/{conversation_id}",
+        "/api/v1/history",
     }
