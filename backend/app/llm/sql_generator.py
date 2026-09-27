@@ -36,6 +36,10 @@ class GeneratedSql(BaseModel):
     sql: str = Field(max_length=10_000)  # "" = cannot be answered from the schema
     explanation: str = Field(max_length=1000)
     chart: ChartHint
+    # Which population the question is about: the user's own row scope, or
+    # university-wide aggregate statistics. A request, not a permission: each
+    # tier's rules are enforced by the server on the SQL.
+    population: Literal["scope", "university"] = "scope"
 
 
 # JSON schema sent to the API as output_config.format (mirrors GeneratedSql).
@@ -55,8 +59,9 @@ OUTPUT_SCHEMA: dict = {
             "required": ["type", "x", "y"],
             "additionalProperties": False,
         },
+        "population": {"type": "string", "enum": ["scope", "university"]},
     },
-    "required": ["resolved_question", "sql", "explanation", "chart"],
+    "required": ["resolved_question", "sql", "explanation", "chart", "population"],
     "additionalProperties": False,
 }
 

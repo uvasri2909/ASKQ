@@ -9,6 +9,8 @@ from app.db.models.base import Base
 from app.db.models.system import (
     AppUserCredential,
     CairAssessment,
+    CairAuditFinding,
+    CairLedgerEntry,
     Conversation,
     ConversationTurn,
     QueryHistory,
@@ -20,6 +22,8 @@ __all__ = [
     "AppUserCredential",
     "Base",
     "CairAssessment",
+    "CairAuditFinding",
+    "CairLedgerEntry",
     "Conversation",
     "ConversationTurn",
     "Department",

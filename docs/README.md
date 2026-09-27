@@ -3,6 +3,6 @@
 | Document | Contents | Added in |
 |---|---|---|
 | [architecture.md](architecture.md) | Components, request pipeline, security layers | Phase 1 |
-| `cair.md` | CAIR design: query descriptors, knowledge ledger, the six audits, scoring, limitations | Phase 8–9 |
-| `attack-scenarios.md` | The six attack demonstrations: sequences, what each query reveals, detection | Phase 10 |
+| [cair.md](cair.md) | CAIR: tiers, threat model, descriptors, populations, state, the six audits, risk and decisions, refusal uniformity, evaluation metrics and measured results, limitations | Phase 5 |
+| [attack-scenarios.md](attack-scenarios.md) | The six reproducible attacks (C1–C6) and benign workloads: steps, expected decisions, classes | Phase 5 |
 | `evaluation.md` | Metric definitions, baseline vs CAIR methodology, measured results | Phase 12 |

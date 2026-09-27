@@ -26,6 +26,8 @@ from app.llm.sql_generator import (
     GenerationRequest,
     SqlGenerationError,
 )
+from app.query.catalog import TABLES
+from app.query.statistics import DIRECT_IDENTIFIERS, STATISTICAL_TABLES
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +61,37 @@ Answer fields:
 - chart: "number" for a single value, "bar" for categories, "line" for a trend over
   time, "pie" for shares of a whole, otherwise "table". x and y name result columns,
   or "" when not applicable.
-
-Schema:
+- population: "scope" for questions about the records this user may see (the schema
+  below); "university" only for aggregate statistics beyond that scope (see below).
 """
+
+STATISTICS = """
+University-wide statistics (population = "university"):
+- Aggregates only: every output column is COUNT, SUM, AVG, MIN, MAX or a GROUP BY
+  attribute. Never names, e-mails, student numbers, dates of birth or record ids, and
+  never filter on a single record id. Groups too small to protect individuals are
+  withheld by the server; do not try to work around that.
+- Tables available for statistics (in addition to the schema below):
+{tables}
+"""
+
+SCHEMA_HEADER = "\nSchema:\n"
+
+
+def _statistics_section() -> str:
+    lines = []
+    for table in TABLES:
+        if table.name not in STATISTICAL_TABLES:
+            continue
+        columns = ", ".join(c for c in table.column_names if c not in DIRECT_IDENTIFIERS)
+        lines.append(f"  {table.name}({columns})")
+    return STATISTICS.format(tables="\n".join(lines))
+
+
+def system_prompt(request: GenerationRequest) -> str:
+    """Instructions, the statistics section (non-admin roles) and this role's schema."""
+    statistics = _statistics_section() if request.role != "ADMIN" else ""
+    return INSTRUCTIONS + statistics + SCHEMA_HEADER + request.schema_context
 
 
 def _user_message(request: GenerationRequest) -> str:
@@ -104,7 +134,7 @@ class ClaudeSqlGenerator:
                 system=[
                     {
                         "type": "text",
-                        "text": INSTRUCTIONS + request.schema_context,
+                        "text": system_prompt(request),
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],

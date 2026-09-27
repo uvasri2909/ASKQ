@@ -77,6 +77,8 @@ class AuthorizedQuery:
     row_limit: int
     scoped_tables: frozenset[str]
     notes: tuple[str, ...]
+    # RECORD (row-scoped, Phase 4) or STATISTICAL (aggregate-only, app/query/statistics.py).
+    tier: str = "RECORD"
 
 
 def _deny(code: str, detail: str = "") -> AuthorizationDenied:

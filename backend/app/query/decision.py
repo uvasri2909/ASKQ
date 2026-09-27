@@ -22,7 +22,7 @@ widen what the user may see.
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.query.authorization import AuthorizedQuery
 from app.query.sql_validator import ValidatedQuery
@@ -76,8 +76,16 @@ class GuardResult:
     decision: Decision  # ALLOW | RESTRICT | BLOCK
     risk_score: float  # 0..1
     policy_version: str
-    reasons: tuple[str, ...] = field(default_factory=tuple)
+    reasons: tuple[str, ...] = field(default_factory=tuple)  # safe to show the user
     restricted_sql: str | None = None  # required for RESTRICT
+    # CAIR detail (all optional; a simple guard leaves them empty):
+    findings: tuple[Any, ...] = field(default_factory=tuple)  # app.cair.model.Finding
+    assessment: dict[str, Any] | None = None  # stored as cair_assessments.reasons
+    ledger: dict[str, Any] | None = None  # stored as a cair_ledger_entries descriptor
+    population_fingerprint: str | None = None
+    # False: the response shows neither the score nor internal reasons
+    # (thresholds and detector outcomes must not be probeable).
+    disclose: bool = True
 
     def __post_init__(self) -> None:
         if self.decision not in GUARD_DECISIONS:

@@ -93,6 +93,22 @@ class Settings(BaseSettings):
     # Recent conversation turns shown to the model to resolve follow-up questions.
     query_context_turns: int = Field(default=5, ge=0, le=20)
 
+    # ---- CAIR (conversation-aware inference risk) ----
+    # When false, the aggregate-only statistical tier is switched off entirely
+    # (it is only safe behind CAIR); record-scope queries work as in Phase 4.
+    cair_enabled: bool = True
+    # Minimum number of people behind any statistic that is revealed.
+    cair_min_group_size: int = Field(default=5, ge=2, le=100)
+    # A detector finding with at least this score is "triggered".
+    cair_trigger_threshold: float = Field(default=0.5, gt=0.0, le=1.0)
+    # How much of a user's history CAIR re-examines for each question.
+    cair_window_queries: int = Field(default=20, ge=1, le=200)
+    cair_window_hours: int = Field(default=24, ge=1, le=24 * 30)
+    # Refused statistical questions on the same attributes before further ones are refused.
+    cair_refusal_probe_limit: int = Field(default=3, ge=1, le=20)
+    # Largest population (distinct people) CAIR materialises per query.
+    cair_population_cap: int = Field(default=20000, ge=100, le=200000)
+
     @field_validator(*SECRET_FIELDS, mode="before")
     @classmethod
     def _empty_secret_is_unset(cls, value: object) -> object:

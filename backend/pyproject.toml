@@ -21,7 +21,9 @@ ignore = []
 # assert is the normal way to write pytest tests; tests pass generated or
 # placeholder credentials on purpose (tests/test_database_sql.py still scans them),
 # and build SQL strings on purpose as inputs to the validator and fixtures.
-"tests/**" = ["S101", "S105", "S106", "S608"]
+# F811: importing pytest fixtures from another test module and using them as
+# test arguments looks like a redefinition to the linter.
+"tests/**" = ["S101", "S105", "S106", "S608", "F811"]
 # Fixed row-scope SQL templates: no user or model input is ever interpolated;
 # scope ids are server-side integers rendered with int() (see the module docstring).
 "app/query/policy.py" = ["S608"]

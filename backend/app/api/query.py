@@ -12,6 +12,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.cair.guard import CairGuard
 from app.db.session import get_app_session
 from app.errors import ErrorResponse
 from app.llm.claude import ClaudeSqlGenerator
@@ -39,8 +40,13 @@ def get_sql_generator(request: Request) -> SqlGenerator:
     return generator
 
 
-def get_inference_guard() -> InferenceGuard:
-    # Phase 5 replaces this with the CAIR guard (same interface).
+def get_inference_guard(
+    request: Request, session: Annotated[Session, Depends(get_app_session)]
+) -> InferenceGuard:
+    """CAIR when enabled; otherwise a pass-through (and no statistical tier)."""
+    settings = request.app.state.settings
+    if settings.cair_enabled:
+        return CairGuard(session, request.app.state.database, settings)
     return PassThroughGuard()
 
 
@@ -56,7 +62,11 @@ def get_query_service(
         timeout_ms=settings.sql_timeout_ms,
         max_rows=settings.sql_max_rows,
     )
-    return QueryService(session, generator, guard, executor, settings)
+    # The aggregate-only statistical tier exists only behind a guard that gates it.
+    statistics = settings.cair_enabled and getattr(guard, "gates_statistics", False)
+    return QueryService(
+        session, generator, guard, executor, settings, statistics_enabled=statistics
+    )
 
 
 def _response(outcome: QueryOutcome, user: UserContext) -> QueryResponse:
@@ -82,7 +92,8 @@ def _response(outcome: QueryOutcome, user: UserContext) -> QueryResponse:
             validation=outcome.validation_status,
             authorization=outcome.authorization_status,
             guard_decision=guard.decision.value if guard else None,
-            risk_score=guard.risk_score if guard else None,
+            # CAIR does not disclose its score: thresholds must not be probeable.
+            risk_score=guard.risk_score if guard and guard.disclose else None,
             guard_reasons=list(guard.reasons) if guard else [],
             scope=user.scope.kind,
             notes=outcome.notes,

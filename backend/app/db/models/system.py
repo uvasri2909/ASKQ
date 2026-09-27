@@ -12,6 +12,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -110,6 +111,7 @@ class QueryHistory(Base):
     error_code: Mapped[str | None] = mapped_column(String(50))
     result_row_count: Mapped[int | None] = mapped_column(Integer)
     execution_ms: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class CairAssessment(Base):
@@ -121,4 +123,36 @@ class CairAssessment(Base):
     assessment_id: Mapped[int] = mapped_column(BigIntegerPK, primary_key=True)
     query_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(QueryHistory.query_id))
     policy_version: Mapped[str] = mapped_column(String(20))
-    reasons: Mapped[list[str]] = mapped_column(JSON)
+    # Phase 4 pass-through: a list of reasons. CAIR: a structured object
+    # (tier, public reasons, attack classes, probes; see app/cair/guard.py).
+    reasons: Mapped[Any] = mapped_column(JSON)
+
+
+class CairAuditFinding(Base):
+    """One row per CAIR audit (attack class) behind an assessment (append-only)."""
+
+    __tablename__ = "cair_audit_findings"
+    __table_args__ = {"schema": SYSTEM_SCHEMA}
+
+    finding_id: Mapped[int] = mapped_column(BigIntegerPK, primary_key=True)
+    assessment_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(CairAssessment.assessment_id))
+    audit_type: Mapped[str] = mapped_column(String(20))
+    score: Mapped[Decimal] = mapped_column(Numeric(5, 4))
+    triggered: Mapped[bool] = mapped_column(Boolean)
+    explanation: Mapped[str] = mapped_column(String(1000))
+    evidence: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+
+
+class CairLedgerEntry(Base):
+    """What a user learned from one executed statistical query (append-only)."""
+
+    __tablename__ = "cair_ledger_entries"
+    __table_args__ = {"schema": SYSTEM_SCHEMA}
+
+    entry_id: Mapped[int] = mapped_column(BigIntegerPK, primary_key=True)
+    query_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(QueryHistory.query_id))
+    user_id: Mapped[int] = mapped_column(Integer)
+    descriptor: Mapped[dict[str, Any]] = mapped_column(JSON)
+    population_fingerprint: Mapped[str] = mapped_column(String(64))
+    result_cardinality: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

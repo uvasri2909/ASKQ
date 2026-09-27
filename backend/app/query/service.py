@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app.clock import utcnow
 from app.config import Settings
 from app.db.models import Conversation, ConversationTurn, QueryHistory
-from app.db.repositories import audit, queries
+from app.db.repositories import audit, cair, queries
 from app.llm.sql_generator import (
     ChartHint,
     GenerationCode,
@@ -52,6 +52,12 @@ from app.query.executor import ExecutionCode, QueryExecutionError, QueryResult, 
 from app.query.policy import policy_for, render
 from app.query.schema_context import schema_context
 from app.query.sql_validator import SqlValidationError, ValidatedQuery, validate_sql
+from app.query.statistics import (
+    RECORD_TIER,
+    STATISTICAL_ROLES,
+    STATISTICAL_TIER,
+    authorize_statistical,
+)
 from app.rbac.scope import UserContext
 
 logger = logging.getLogger(__name__)
@@ -114,12 +120,19 @@ class QueryService:
         executor: ReaderExecutor,
         settings: Settings,
         clock: Callable[[], datetime] = utcnow,
+        *,
+        statistics_enabled: bool = False,
+        statistics_min_group_size: int | None = None,
     ) -> None:
         self._session = session
         self._generator = generator
         self._guard = guard
         self._executor = executor
         self._settings = settings
+        # The aggregate-only statistical tier is offered only behind CAIR.
+        self._statistics_enabled = statistics_enabled
+        # Only the evaluation harness overrides this (BASELINE = no inference control).
+        self._min_group_size = statistics_min_group_size or settings.cair_min_group_size
         self._clock = clock
 
     # ------------------------------------------------------------------ public
@@ -223,11 +236,12 @@ class QueryService:
             raise _Stop(Decision.REJECTED, exc.message, exc.code, None) from None
         record.validation_status = outcome.validation_status = "PASSED"
 
-        # 3. Authorization: role policy, row scope, LIMIT.
+        # 3. Authorization: role policy, row scope (RECORD) or aggregate-only rules
+        #    (STATISTICAL), and LIMIT. The model only says which population it
+        #    meant; each tier enforces its own rules on the SQL.
+        tier = self._tier(user, generated.population)
         try:
-            authorized = authorize(
-                validated, user, university_db=db, max_rows=settings.sql_max_rows
-            )
+            authorized = self._authorize(validated, user, tier, settings.sql_max_rows)
         except AuthorizationDenied as exc:
             record.authorization_status = outcome.authorization_status = AuthorizationStatus.DENIED
             logger.info("query denied: %s (%s)", exc.code, exc.detail)
@@ -252,7 +266,8 @@ class QueryService:
         record.risk_score = Decimal(str(round(result.risk_score, 4)))
         outcome.guard = result
         if result.decision is Decision.BLOCK:
-            raise _Stop(Decision.BLOCK, _DECISION_MESSAGES[Decision.BLOCK], "GUARD_BLOCK", None)
+            # One code and message for every refusal by the guard, whatever the cause.
+            raise _Stop(Decision.BLOCK, _DECISION_MESSAGES[Decision.BLOCK], "INFERENCE_RISK", None)
         sql = authorized.sql
         if result.decision is Decision.RESTRICT:
             sql = self._restricted_sql(result.restricted_sql or "", authorized, user, db)
@@ -283,12 +298,31 @@ class QueryService:
         validated: ValidatedQuery = validate_sql(
             restricted_sql, catalog_tables=CATALOG, university_db=db
         )
-        return authorize(
-            validated,
-            user,
-            university_db=db,
-            max_rows=min(authorized.row_limit, self._settings.sql_max_rows),
-        ).sql
+        max_rows = min(authorized.row_limit, self._settings.sql_max_rows)
+        return self._authorize(validated, user, authorized.tier, max_rows).sql
+
+    def _tier(self, user: UserContext, population: str) -> str:
+        if (
+            population == "university"
+            and self._statistics_enabled
+            and user.role in STATISTICAL_ROLES
+        ):
+            return STATISTICAL_TIER
+        return RECORD_TIER
+
+    def _authorize(
+        self, validated: ValidatedQuery, user: UserContext, tier: str, max_rows: int
+    ) -> AuthorizedQuery:
+        db = self._settings.db_university_name
+        if tier == STATISTICAL_TIER:
+            return authorize_statistical(
+                validated,
+                user,
+                university_db=db,
+                max_rows=max_rows,
+                min_group_size=self._min_group_size,
+            )
+        return authorize(validated, user, university_db=db, max_rows=max_rows)
 
     # ------------------------------------------------------------------ helpers
     def _conversation(
@@ -339,10 +373,24 @@ class QueryService:
         queries.add_history(session, record)
         outcome.query_id = record.query_id
 
-        if outcome.guard is not None:
-            queries.add_assessment(
-                session, record.query_id, outcome.guard.policy_version, list(outcome.guard.reasons)
+        guard = outcome.guard
+        if guard is not None:
+            reasons = guard.assessment if guard.assessment is not None else list(guard.reasons)
+            assessment = queries.add_assessment(
+                session, record.query_id, guard.policy_version, reasons
             )
+            if guard.findings:
+                cair.add_findings(session, assessment.assessment_id, guard.findings)
+            if guard.ledger is not None and decision in (Decision.ALLOW, Decision.RESTRICT):
+                # What the user has now learned: the knowledge ledger.
+                cair.add_ledger_entry(
+                    session,
+                    query_id=record.query_id,
+                    user_id=user.user_id,
+                    descriptor=guard.ledger,
+                    fingerprint=guard.population_fingerprint or "0" * 64,
+                    result_cardinality=record.result_row_count,
+                )
         event = {
             Decision.REJECTED: audit.AuditEvent.QUERY_REJECTED,
             Decision.DENIED: audit.AuditEvent.QUERY_DENIED,

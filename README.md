@@ -6,8 +6,8 @@ enforces role-based access control, and runs **CAIR** (Conversation-Aware Infere
 Risk) analysis. CAIR detects when a *sequence* of individually harmless queries could
 reveal sensitive information. Only then is the query executed.
 
-> **Status:** Phase 4 of 14 (secure natural-language-to-SQL pipeline).
-> CAIR inference detection (Phase 5) and the frontend are not implemented yet.
+> **Status:** Phase 5 of 14 (CAIR: conversation-aware inference risk).
+> The frontend is not implemented yet.
 
 See [docs/architecture.md](docs/architecture.md) for the design,
 [backend/README.md](backend/README.md) for the API, authentication and RBAC, and
@@ -125,3 +125,5 @@ cd C:\ASKQ
   data and `askq_reader` (read-only) for organisational data.
 - LLM-generated SQL is never executed without validation, authorization and CAIR checks.
 - CAIR is a heuristic, explainable risk detector, not a formal privacy guarantee.
+  See [docs/cair.md](docs/cair.md) and [docs/attack-scenarios.md](docs/attack-scenarios.md);
+  run the scenario evaluation with `backend\.venv\Scripts\python -m app.evaluation`.

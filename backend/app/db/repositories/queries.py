@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -91,8 +92,11 @@ def add_history(session: Session, record: QueryHistory) -> QueryHistory:
 
 
 def add_assessment(
-    session: Session, query_id: int, policy_version: str, reasons: list[str]
-) -> None:
-    session.add(
-        CairAssessment(query_id=query_id, policy_version=policy_version[:20], reasons=reasons)
+    session: Session, query_id: int, policy_version: str, reasons: Any
+) -> CairAssessment:
+    assessment = CairAssessment(
+        query_id=query_id, policy_version=policy_version[:20], reasons=reasons
     )
+    session.add(assessment)
+    session.flush()
+    return assessment

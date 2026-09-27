@@ -8,7 +8,9 @@ The ASKQ FastAPI service.
 - **Phase 4** adds the natural-language query pipeline: Claude drafts SQL, and the
   server validates it, authorizes it with row scope, bounds it and runs it as
   `askq_reader`, recording every step.
-- **CAIR (Phase 5)** plugs into the pipeline's guard hook.
+- **Phase 5** adds CAIR (`app/cair/`), plugged into the guard hook. It comes with
+  an aggregate-only **statistical tier** (`app/query/statistics.py`) and an
+  evaluation harness (`app/evaluation/`). Full design: [../docs/cair.md](../docs/cair.md).
 
 ```
 app/
@@ -48,7 +50,16 @@ app/
 │   ├── decision.py    Decision model; InferenceGuard hook (CAIR, Phase 5)
 │   ├── executor.py    runs SQL as askq_reader only (timeout, row cap)
 │   ├── service.py     the pipeline; writes query history through askq_app
+│   ├── statistics.py  STATISTICAL tier: aggregate-only rules + minimum group size
 │   └── schemas.py     request/response models
+├── cair/
+│   ├── descriptor.py  query descriptor from the parsed SQL
+│   ├── population.py  server-generated population probes (person ids, in memory)
+│   ├── state.py       per-user history window, rebuilt from askq_system
+│   ├── detectors.py   the six audits over populations
+│   ├── scoring.py     risk, ALLOW / RESTRICT / BLOCK, complementary suppression
+│   └── guard.py       CairGuard (the pipeline's InferenceGuard)
+├── evaluation/        scenarios C1-C6 + benign workloads, harness, metrics (python -m app.evaluation)
 └── cli/set_password.py  provision a user's password (run by hand)
 ```
 
@@ -87,6 +98,10 @@ app/
 | `SQL_MAX_ROWS` | `500` | Every executed query is bounded to this many rows |
 | `SQL_TIMEOUT_MS` | `5000` | MySQL `max_execution_time` per executed query |
 | `QUERY_CONTEXT_TURNS` | `5` | Earlier turns shown to the model for follow-ups |
+| `CAIR_ENABLED` | `true` | `false` switches off the statistical tier and uses a pass-through guard |
+| `CAIR_MIN_GROUP_SIZE`, `CAIR_TRIGGER_THRESHOLD` | `5`, `0.5` | See docs/cair.md |
+| `CAIR_WINDOW_QUERIES`, `CAIR_WINDOW_HOURS` | `20`, `24` | History CAIR re-examines per question |
+| `CAIR_REFUSAL_PROBE_LIMIT`, `CAIR_POPULATION_CAP` | `3`, `20000` | |
 
 Secrets are `SecretStr`: masked in `repr`, logs and validation errors. A secret
 that is unset or still has its `.env.example` placeholder (`change-me…`) counts
@@ -272,8 +287,22 @@ are never described to anyone. Nothing is discovered from `information_schema`.
   is added and a larger one is capped. Only literal LIMIT/OFFSET values are
   accepted.
 - **Re-validation:** the rewritten SQL is validated again before it may run.
+- **Statistical tier (Phase 5, `query/statistics.py`):** when the model marks a
+  question `population: "university"` and CAIR is enabled, a non-admin user's
+  query is authorized as an **aggregate-only** university-wide statistic
+  instead of a row-scoped record query:
+  - statistical tables only, with no direct identifiers anywhere;
+  - record keys only for joins;
+  - every output an aggregate or a group key;
+  - `HAVING COUNT(DISTINCT <person>) >= CAIR_MIN_GROUP_SIZE` always added.
 
-**5. Guard (`query/decision.py`): the Phase 5 hook.**
+  CAIR then judges it. `population` selects which rules apply; it grants
+  nothing.
+
+**5. Guard (`query/decision.py`): the CAIR hook.** Phase 5 plugs in `CairGuard`
+([../docs/cair.md](../docs/cair.md)). For record-tier questions it always
+ALLOWs; for statistical questions it runs the six audits. The details below are
+the contract every guard follows.
 - **Interface:** `InferenceGuard.assess(GuardInput) -> GuardResult`, with
   ALLOW/RESTRICT/BLOCK, a risk score in [0, 1], reasons and a policy version.
   It receives the server's `UserContext`, the parsed query, the authorized and
@@ -323,7 +352,7 @@ database is not configured.
 - **Never stored:** result rows, passwords, tokens or keys. Generated SQL is
   offered back to the model as context only for turns that actually ran.
 
-**Phase 4 / Phase 5 boundary.** Phase 4 enforces everything about a *single*
+**Single query vs. conversation.** Phase 4 enforces everything about a *single*
 query:
 - it is safe SQL;
 - it is within the role's tables and columns;
@@ -332,7 +361,7 @@ query:
 
 It does not reason across queries. Inference from sequences of individually
 allowed answers (differencing, narrowing, arithmetic recovery, cross-view
-linking, refusal side channels, context carry-over) is CAIR's job in Phase 5,
+linking, refusal side channels, context carry-over) is CAIR's job (Phase 5),
 behind the guard interface above.
 
 ## Errors
@@ -375,12 +404,9 @@ they insert credentials inside a transaction that is always rolled back, so
 
 ## Security notes and future hardening
 
-- **Phase 4 limits (by design, until Phase 5):**
-  - The pass-through guard does no inference analysis.
-  - Aggregates over small groups (e.g. the average of a group of one) are not
-    suppressed yet.
-  - A HOD or TEACHER may still see students' quasi-identifiers such as home
-    region within their scope.
+- **CAIR limits:** see [../docs/cair.md](../docs/cair.md#limitations). In
+  short, it's a deterministic heuristic over a bounded window, it doesn't link
+  colluding accounts, and it doesn't equalise timing.
 - The authorizer's hidden-column check is by column name, and hidden columns
   are also removed from every scoped derived table, so `SELECT *` cannot
   reveal them.

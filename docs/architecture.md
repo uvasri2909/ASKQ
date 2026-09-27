@@ -13,13 +13,19 @@ CAIR (Conversation-Aware Inference Risk) analysis.
 | LLM | Claude API | Translates questions into candidate SQL (treated as **untrusted**) |
 | SQL safety | sqlglot | Parses SQL to an AST; enforces single read-only SELECT |
 | RBAC | Backend policy module | Table/column/aggregate checks; server-side row-scope rewriting |
-| CAIR | Backend module | Per-user knowledge ledger + six inference audits → ALLOW / RESTRICT / BLOCK |
+| CAIR | `backend/app/cair` | Population probes + per-user knowledge ledger + six inference audits → ALLOW / RESTRICT / BLOCK ([cair.md](cair.md)) |
 | Database | MySQL 8 | `askq_university` (org data), `askq_system` (history, ledger, eval) |
 
 ## Request pipeline
 
-Steps 1-5 and 7-8 are implemented (Phase 4; see `backend/README.md`, "Query
-pipeline"). Step 6 is a pass-through hook until CAIR arrives in Phase 5.
+All steps are implemented:
+- Steps 1–5 and 7–8 in Phase 4 (see `backend/README.md`, "Query pipeline").
+- Step 6, CAIR, in Phase 5 (see [cair.md](cair.md)).
+
+Step 5 has two tiers:
+- **RECORD:** the Phase 4 row scope; a user reads individual rows.
+- **STATISTICAL:** university-wide, aggregate-only, and at least k people behind
+  every statistic. Offered only while CAIR is enabled.
 
 ```
 Browser ──JSON + JWT──► FastAPI
@@ -48,6 +54,11 @@ Browser ──JSON + JWT──► FastAPI
 - **Row scope is enforced by rewriting, not by asking.** Each scoped table is
   replaced with a derived table limited to the user's rows and visible columns,
   so no predicate the model writes can widen what a query sees.
-- **Deterministic, explainable CAIR.** Descriptors come from the parsed SQL, not
-  from the LLM, so the same query sequence always produces the same decision.
+- **Deterministic, explainable CAIR.** Descriptors come from the parsed SQL, and
+  populations come from server-generated probes, never from the LLM, so the same
+  query sequence always produces the same decision.
+- **CAIR only narrows.** It runs after authorization; RESTRICT output is
+  re-validated and re-authorized, and a BLOCK runs nothing. Refusals are uniform
+  (same message and code whatever the cause), and CAIR's score and reasons are
+  never returned to the client.
 - **Honest limits.** CAIR is a heuristic risk detector, not a formal privacy guarantee.
