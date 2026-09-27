@@ -1,13 +1,26 @@
-"""askq_system tables used from Phase 3: credentials and the security audit log.
+"""askq_system tables: credentials and audit log (Phase 3); conversations and query
+history (Phase 4).
 
 user_id is a logical reference to askq_university.users (no cross-database FK).
 Timestamps are naive UTC datetimes (see app.clock).
 """
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Integer, SmallInteger, String, func
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    SmallInteger,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.engine import SYSTEM_SCHEMA
@@ -38,5 +51,74 @@ class SecurityAuditEvent(Base):
     user_id: Mapped[int | None] = mapped_column(Integer)
     event_type: Mapped[str] = mapped_column(String(50))
     severity: Mapped[str] = mapped_column(String(8))
+    query_id: Mapped[int | None] = mapped_column(BigInteger)
     client_ip: Mapped[str | None] = mapped_column(String(45))
     details: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+    __table_args__ = {"schema": SYSTEM_SCHEMA}
+
+    conversation_id: Mapped[int] = mapped_column(BigIntegerPK, primary_key=True)
+    # Opaque id shown to clients instead of the sequential key.
+    public_id: Mapped[str] = mapped_column(String(36), unique=True)
+    user_id: Mapped[int] = mapped_column(Integer)
+    role_code: Mapped[str] = mapped_column(String(20))
+    title: Mapped[str | None] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(8), default="ACTIVE")
+    started_at: Mapped[datetime] = mapped_column(DateTime)
+    last_activity_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class ConversationTurn(Base):
+    __tablename__ = "conversation_turns"
+    __table_args__ = {"schema": SYSTEM_SCHEMA}
+
+    turn_id: Mapped[int] = mapped_column(BigIntegerPK, primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey(Conversation.conversation_id)
+    )
+    turn_no: Mapped[int] = mapped_column(Integer)
+    question: Mapped[str] = mapped_column(Text)
+    answer_summary: Mapped[str | None] = mapped_column(Text)
+
+
+class QueryHistory(Base):
+    """One row per question that entered the pipeline; written once (askq_app: INSERT only)."""
+
+    __tablename__ = "query_history"
+    __table_args__ = {"schema": SYSTEM_SCHEMA}
+
+    query_id: Mapped[int] = mapped_column(BigIntegerPK, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer)
+    role_code: Mapped[str] = mapped_column(String(20))
+    conversation_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey(Conversation.conversation_id)
+    )
+    turn_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey(ConversationTurn.turn_id))
+    question_text: Mapped[str | None] = mapped_column(Text)
+    resolved_question: Mapped[str | None] = mapped_column(Text)
+    generated_sql: Mapped[str | None] = mapped_column(Text)
+    validation_status: Mapped[str | None] = mapped_column(String(8))
+    authorization_status: Mapped[str | None] = mapped_column(String(9))
+    cair_decision: Mapped[str | None] = mapped_column(String(8))
+    risk_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
+    executed_sql: Mapped[str | None] = mapped_column(Text)
+    final_status: Mapped[str] = mapped_column(String(10))
+    failure_stage: Mapped[str | None] = mapped_column(String(13))
+    error_code: Mapped[str | None] = mapped_column(String(50))
+    result_row_count: Mapped[int | None] = mapped_column(Integer)
+    execution_ms: Mapped[int | None] = mapped_column(Integer)
+
+
+class CairAssessment(Base):
+    """Why the guard decided what it did for one query (append-only)."""
+
+    __tablename__ = "cair_assessments"
+    __table_args__ = {"schema": SYSTEM_SCHEMA}
+
+    assessment_id: Mapped[int] = mapped_column(BigIntegerPK, primary_key=True)
+    query_id: Mapped[int] = mapped_column(BigInteger, ForeignKey(QueryHistory.query_id))
+    policy_version: Mapped[str] = mapped_column(String(20))
+    reasons: Mapped[list[str]] = mapped_column(JSON)

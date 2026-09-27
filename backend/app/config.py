@@ -26,10 +26,11 @@ PLACEHOLDER_PREFIXES = ("change-me", "your-")
 MIN_JWT_SECRET_LENGTH = 32
 # HMAC only: the secret is shared by issuer and verifier, and "none" is never accepted.
 ALLOWED_JWT_ALGORITHMS = ("HS256", "HS384", "HS512")
-SECRET_FIELDS = ("db_reader_password", "db_app_password", "jwt_secret")
+SECRET_FIELDS = ("db_reader_password", "db_app_password", "jwt_secret", "anthropic_api_key")
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_]{1,64}$")
 _ORIGIN = re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$")
+_MODEL_ID = re.compile(r"^[A-Za-z0-9._:@/-]{1,100}$")
 
 
 class ConfigurationError(RuntimeError):
@@ -75,6 +76,23 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = Field(default=60, ge=1, le=1440)
 
+    # ---- Claude (SQL generation) ----
+    anthropic_api_key: SecretStr | None = None
+    # Model id as named in the Claude API. The project default is kept in
+    # .env.example; any current model id can be configured.
+    anthropic_model: str = "claude-sonnet-5"
+    anthropic_max_tokens: int = Field(default=16000, ge=1024, le=64000)
+    anthropic_timeout_seconds: float = Field(default=60.0, ge=5.0, le=600.0)
+    anthropic_max_retries: int = Field(default=1, ge=0, le=5)
+
+    # ---- Query execution limits (askq_reader) ----
+    # Every executed SELECT is bounded to this many rows (a larger LIMIT is capped).
+    sql_max_rows: int = Field(default=500, ge=1, le=10000)
+    # Server-side statement timeout for each executed SELECT (max_execution_time).
+    sql_timeout_ms: int = Field(default=5000, ge=100, le=60000)
+    # Recent conversation turns shown to the model to resolve follow-up questions.
+    query_context_turns: int = Field(default=5, ge=0, le=20)
+
     @field_validator(*SECRET_FIELDS, mode="before")
     @classmethod
     def _empty_secret_is_unset(cls, value: object) -> object:
@@ -108,6 +126,8 @@ class Settings(BaseSettings):
             raise ValueError("DB_READER_PASSWORD and DB_APP_PASSWORD must differ")
         if self.db_pool_size + self.db_max_overflow > 20:
             raise ValueError("DB_POOL_SIZE + DB_MAX_OVERFLOW must not exceed 20")
+        if not _MODEL_ID.match(self.anthropic_model):
+            raise ValueError("ANTHROPIC_MODEL is not a valid model id")
 
         origins = self.cors_origin_list
         for origin in origins:

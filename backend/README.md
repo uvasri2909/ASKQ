@@ -1,9 +1,14 @@
 # backend/
 
-The ASKQ FastAPI service. Phase 3 adds the foundation: configuration, the two
-database connections, Argon2id passwords, JWT authentication, and role-based
-access control with a data-scope model. SQL generation, Claude, CAIR and the
-query pipeline are later phases.
+The ASKQ FastAPI service.
+
+- **Phase 3** added the foundation: configuration, the two database connections,
+  Argon2id passwords, JWT authentication, and role-based access control with a
+  data-scope model.
+- **Phase 4** adds the natural-language query pipeline: Claude drafts SQL, and the
+  server validates it, authorizes it with row scope, bounds it and runs it as
+  `askq_reader`, recording every step.
+- **CAIR (Phase 5)** plugs into the pipeline's guard hook.
 
 ```
 app/
@@ -31,6 +36,19 @@ app/
 │   ├── session.py     Database container; get_app_session, get_reader_connection
 │   ├── models/        users, roles, departments, app_user_credentials, security_audit_log
 │   └── repositories/  users, credentials, audit
+├── llm/
+│   ├── sql_generator.py SqlGenerator protocol, GeneratedSql contract, error codes
+│   └── claude.py      the only module that imports the Anthropic SDK
+├── query/
+│   ├── catalog.py     the queryable tables/views (application-controlled metadata)
+│   ├── policy.py      per-role tables, hidden columns, row-scope templates
+│   ├── schema_context.py  role-filtered schema text for the model
+│   ├── sql_validator.py   layer 1: single safe SELECT (tokens, parse, allowlist, tables)
+│   ├── authorization.py   layer 2: role/column checks, row-scope rewrite, LIMIT
+│   ├── decision.py    Decision model; InferenceGuard hook (CAIR, Phase 5)
+│   ├── executor.py    runs SQL as askq_reader only (timeout, row cap)
+│   ├── service.py     the pipeline; writes query history through askq_app
+│   └── schemas.py     request/response models
 └── cli/set_password.py  provision a user's password (run by hand)
 ```
 
@@ -42,6 +60,7 @@ app/
 | GET | `/health/db` | none | `SELECT 1` through each account. `200 {"status":"ok","checks":{"app":"ok","reader":"ok"}}`, or `503` with `"unavailable"` per failed check. No host, user, version or error text. |
 | POST | `/api/v1/auth/login` | none | `{"username","password"}` → `{"access_token","token_type":"bearer","expires_in","user":{id,username,role,permissions}}` |
 | GET | `/api/v1/auth/me` | Bearer | `{id, username, role, permissions}` for the caller, re-read from the database |
+| POST | `/api/v1/query` | Bearer + `ASK_QUESTIONS` | `{"question", "conversation_id"?}` → the decision, the executed SQL, columns/rows, chart hint and a security summary. See "Query pipeline". |
 | GET | `/docs`, `/openapi.json` | none | Interactive docs (disabled when `APP_ENV=production`) |
 
 ## Configuration
@@ -62,6 +81,12 @@ app/
 | `JWT_EXPIRE_MINUTES` | `60` | 1–1440 |
 | `DB_POOL_SIZE`, `DB_MAX_OVERFLOW` | `5`, `5` | Per engine; sum ≤ 20 (each account's `MAX_USER_CONNECTIONS`) |
 | `DB_POOL_RECYCLE_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS` | `1800`, `5` | |
+| `ANTHROPIC_API_KEY` | none | Required for `/api/v1/query` (503 without it); never logged |
+| `ANTHROPIC_MODEL` | `claude-sonnet-5` | Any current Claude model id |
+| `ANTHROPIC_MAX_TOKENS`, `ANTHROPIC_TIMEOUT_SECONDS`, `ANTHROPIC_MAX_RETRIES` | `16000`, `60`, `1` | |
+| `SQL_MAX_ROWS` | `500` | Every executed query is bounded to this many rows |
+| `SQL_TIMEOUT_MS` | `5000` | MySQL `max_execution_time` per executed query |
+| `QUERY_CONTEXT_TURNS` | `5` | Earlier turns shown to the model for follow-ups |
 
 Secrets are `SecretStr`: masked in `repr`, logs and validation errors. A secret
 that is unset or still has its `.env.example` placeholder (`change-me…`) counts
@@ -162,6 +187,154 @@ A missing or invalid token gets `401` with `WWW-Authenticate: Bearer`.
   request dependency. **Conversation context, model output, request
   parameters, headers or token claims never override role or scope.**
 
+## Query pipeline (Phase 4)
+
+```
+question ──► Claude ──► UNTRUSTED SQL ──► validate ──► authorize + row scope + LIMIT
+          ──► guard (CAIR, Phase 5) ──► askq_reader (read-only) ──► result
+every step ──► query_history / cair_assessments / security_audit_log (askq_app)
+```
+
+**The model is not trusted for anything.** It receives the role, a
+description of the user's scope and a role-filtered schema, so that it can
+write useful SQL. Its output is treated like input typed by an attacker. The
+prompt tells it not to work around access rules, but nothing depends on it
+obeying: every rule is enforced afterwards, in code, on the parsed SQL.
+Conversation history is passed to the model as data to resolve follow-ups
+("and for year 2?"). It never reaches the authorizer, so context can change
+what is asked but never what is allowed.
+
+**1. Generation (`llm/claude.py`).**
+- **Call:** Anthropic SDK, `messages.create` with structured outputs
+  (`output_config.format` = JSON schema), which returns `resolved_question`,
+  `sql`, `explanation` and `chart`.
+- **Validation of the output:** the reply is re-validated with a strict
+  Pydantic model. Malformed JSON, extra fields, a refusal or truncation are
+  rejected, never repaired.
+- **Errors:** SDK errors map to codes such as `LLM_TIMEOUT` and
+  `LLM_RATE_LIMITED`. Only the exception class name is logged.
+- **Credentials:** the key comes only from Settings.
+- **Caching:** the system prompt (instructions plus the role's schema) is marked
+  for prompt caching.
+- **Scope of the SDK:** the rest of the backend depends only on the
+  `SqlGenerator` protocol. Tests replace it; no test calls the API.
+
+**2. Role-filtered schema (`query/catalog.py`, `policy.py`, `schema_context.py`).**
+The model sees a fixed, application-written description of the 15 tables and
+2 views that `askq_reader` can read, minus the tables and columns the user's
+role may not use. `users`, `roles`, `askq_system`, credentials and audit data
+are never described to anyone. Nothing is discovered from `information_schema`.
+
+**3. Validation (`query/sql_validator.py`): is it a single, plain SELECT?**
+- **Tokens:** no comments of any kind and no `;`. The parser drops comments,
+  but MySQL executes `/*!…*/` and honours `/*+…*/`.
+- **Parse:** exactly one statement, rooted at `SELECT` (or `UNION` of `SELECT`s).
+  DML, DDL, `GRANT`/`REVOKE`, `CALL`/`EXECUTE`/`PREPARE`, `SET`, `SHOW`,
+  `HANDLER`, `INTO OUTFILE`/`DUMPFILE` all fail here.
+- **Whole-tree allowlist of node types and functions:** anything not listed is
+  rejected. This includes `INTO @var`, `FOR UPDATE`, `@var`/`@@sysvar`,
+  placeholders, hex/charset literals, `COLLATE`, `INTERSECT`/`EXCEPT`, recursive
+  CTEs, SELECT modifiers, index/partition hints, and every function not on the
+  list (`SLEEP`, `BENCHMARK`, `LOAD_FILE`, `USER()`, `GET_LOCK`, ...). That
+  closes the residual `askq_reader` exposures listed in `database/README.md`.
+- **Tables:** only catalog tables, optionally qualified with `askq_university`.
+  System schemas, `askq_system`, `users`/`roles` and unknown names all get the
+  same "data not available" message, so the answer does not reveal what exists.
+- **Canonical SQL:** from here on, the SQL is regenerated from the parsed tree,
+  so what runs is exactly what was checked.
+
+**4. Authorization (`query/authorization.py`): may this user run it, over which rows?**
+- **Tables and columns:** a table outside the role's policy, or a hidden column
+  (salary except for ADMIN; date of birth for HOD and TEACHER; gender for
+  TEACHER), gives `DENIED`. For STUDENT, an explicit `student_id` literal other
+  than their own is also `DENIED`.
+- **Row scope by rewriting:** every reference to a scoped table, anywhere in
+  the tree, is replaced by a derived table holding only the role's visible
+  columns and only the user's rows, under the same alias:
+  ```
+  FROM students s  →  FROM (SELECT <visible columns> FROM askq_university.students
+                            WHERE department_id = 3) AS s
+  ```
+  The model's predicates cannot widen this. A HOD asking for another
+  department simply gets no rows.
+- **Scope ids:** these are integers from the server-side `UserContext`.
+
+  | Role | Rows visible (people, enrollments, grades, attendance, finance) |
+  |---|---|
+  | ADMIN | everything |
+  | HOD | their department's teachers and students, and enrollments of those students or of the department's courses |
+  | TEACHER | their department's teachers; students they teach or advise; enrollments in their offerings or of advisees. No financial tables. |
+  | STUDENT | their own records; teachers of their offerings and their advisor |
+
+  Reference data (departments, terms, grade scale, courses, offerings, class
+  sessions, scholarship catalogue) is visible to all roles.
+- **LIMIT:** the outermost query is bounded to `SQL_MAX_ROWS`. A missing LIMIT
+  is added and a larger one is capped. Only literal LIMIT/OFFSET values are
+  accepted.
+- **Re-validation:** the rewritten SQL is validated again before it may run.
+
+**5. Guard (`query/decision.py`): the Phase 5 hook.**
+- **Interface:** `InferenceGuard.assess(GuardInput) -> GuardResult`, with
+  ALLOW/RESTRICT/BLOCK, a risk score in [0, 1], reasons and a policy version.
+  It receives the server's `UserContext`, the parsed query, the authorized and
+  scoped query, and the conversation history.
+- **Phase 4 guard:** `PassThroughGuard`, which always ALLOWs with risk 0 and
+  says so in its recorded reason.
+- **RESTRICT:** a guard may only narrow. RESTRICT SQL goes through validation
+  and authorization again (role tables, hidden columns, row scope, LIMIT), so
+  even a faulty guard cannot widen what the user sees. A BLOCK never reaches
+  the reader.
+
+**6. Execution (`query/executor.py`).**
+- **Account:** only through `Database.reader_connection()`: `askq_reader`, a
+  read-only session, `max_execution_time = SQL_TIMEOUT_MS`.
+- **Row cap:** at most `SQL_MAX_ROWS` rows are fetched.
+- **No parameter formatting:** statements run with `no_parameters=True`, so
+  `LIKE '%x%'` is never %-formatted.
+- **Separation:** no code path runs model-derived SQL on the app engine or as
+  root, and the tests spy on both engines to prove it.
+
+**Decisions.** Each question ends in exactly one server-controlled decision,
+returned with a safe message and recorded:
+
+| Decision | Meaning | `query_history.final_status` |
+|---|---|---|
+| ALLOW | Executed (possibly row-scoped / row-limited) | EXECUTED |
+| RESTRICT | Executed in a narrower form chosen by the guard | RESTRICTED |
+| BLOCK | Guard refused; not executed | BLOCKED |
+| DENIED | Authorization refused (table, column or scope); not executed | DENIED |
+| REJECTED | SQL validation refused; not executed | REJECTED |
+| FAILED | System error at a stage (generation, validation, authorization, CAIR, execution) | FAILED |
+
+All of these are `200` responses carrying the decision. HTTP errors are
+reserved for the request itself: 401/403/404/422, and 503 when Claude or the
+database is not configured.
+
+**History.** One `query_history` row per question, through `askq_app`:
+- **Turns:** each question is a `conversation_turns` row. Conversations are the
+  caller's own; anyone else's conversation id is a 404.
+- **What the row holds:** the resolved question, the model's generated SQL,
+  each gate's outcome, the executed SQL, row count and timing, and the failure
+  stage and code.
+- **Assessments:** each guard result is written to `cair_assessments`.
+- **Audit:** `QUERY_REJECTED`/`DENIED`/`BLOCKED` go to `security_audit_log`,
+  plus `READER_ACCESS_DENIED` (CRITICAL) if MySQL ever refuses a query that
+  passed the validator.
+- **Never stored:** result rows, passwords, tokens or keys. Generated SQL is
+  offered back to the model as context only for turns that actually ran.
+
+**Phase 4 / Phase 5 boundary.** Phase 4 enforces everything about a *single*
+query:
+- it is safe SQL;
+- it is within the role's tables and columns;
+- it is restricted to the user's rows;
+- it is bounded in size and time.
+
+It does not reason across queries. Inference from sequences of individually
+allowed answers (differencing, narrowing, arithmetic recovery, cross-view
+linking, refusal side channels, context carry-over) is CAIR's job in Phase 5,
+behind the guard interface above.
+
 ## Errors
 
 All errors share one shape: `{"error": {"code": "...", "message": "..."}}`.
@@ -201,6 +374,18 @@ they insert credentials inside a transaction that is always rolled back, so
 `askq_system` stays empty.
 
 ## Security notes and future hardening
+
+- **Phase 4 limits (by design, until Phase 5):**
+  - The pass-through guard does no inference analysis.
+  - Aggregates over small groups (e.g. the average of a group of one) are not
+    suppressed yet.
+  - A HOD or TEACHER may still see students' quasi-identifiers such as home
+    region within their scope.
+- The authorizer's hidden-column check is by column name, and hidden columns
+  are also removed from every scoped derived table, so `SELECT *` cannot
+  reveal them.
+- There is no per-user rate limit on `/api/v1/query` yet, and each question
+  costs one Claude call.
 
 - **Rate limiting and automatic lockout are not implemented yet.** Failed
   attempts are counted and `locked_until` is honoured, but nothing sets it

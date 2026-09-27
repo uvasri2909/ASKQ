@@ -6,7 +6,25 @@ tests/integration checks them against the live MySQL tables.
 """
 
 from app.db.models.base import Base
-from app.db.models.system import AppUserCredential, SecurityAuditEvent
+from app.db.models.system import (
+    AppUserCredential,
+    CairAssessment,
+    Conversation,
+    ConversationTurn,
+    QueryHistory,
+    SecurityAuditEvent,
+)
 from app.db.models.university import Department, Role, User
 
-__all__ = ["AppUserCredential", "Base", "Department", "Role", "SecurityAuditEvent", "User"]
+__all__ = [
+    "AppUserCredential",
+    "Base",
+    "CairAssessment",
+    "Conversation",
+    "ConversationTurn",
+    "Department",
+    "QueryHistory",
+    "Role",
+    "SecurityAuditEvent",
+    "User",
+]

@@ -18,13 +18,16 @@ CAIR (Conversation-Aware Inference Risk) analysis.
 
 ## Request pipeline
 
+Steps 1-5 and 7-8 are implemented (Phase 4; see `backend/README.md`, "Query
+pipeline"). Step 6 is a pass-through hook until CAIR arrives in Phase 5.
+
 ```
 Browser ──JSON + JWT──► FastAPI
   1. Authenticate      verify JWT → user id, role, department/student/teacher scope
   2. Context           load recent conversation turns
   3. Generate          Claude: question + context + schema visible to this role → SQL text
-  4. Validate          parse; exactly one SELECT; no DDL/DML, stacked statements,
-                       system schemas or file I/O; enforce row LIMIT
+  4. Validate          tokens (no comments / ';'); parse; exactly one SELECT; node
+                       and function allowlist; catalog tables only; row LIMIT
   5. Authorize         every table/column/aggregate checked against role policy;
                        row-scope predicates injected server-side
   6. CAIR              descriptor from the *rewritten* AST vs. user's ledger
@@ -42,6 +45,9 @@ Browser ──JSON + JWT──► FastAPI
 - **Backend-only enforcement.** Frontend route guards exist for usability, not security.
 - **Context supplies meaning, never permission.** Every follow-up question is
   re-authorised and re-audited from scratch.
+- **Row scope is enforced by rewriting, not by asking.** Each scoped table is
+  replaced with a derived table limited to the user's rows and visible columns,
+  so no predicate the model writes can widen what a query sees.
 - **Deterministic, explainable CAIR.** Descriptors come from the parsed SQL, not
   from the LLM, so the same query sequence always produces the same decision.
 - **Honest limits.** CAIR is a heuristic risk detector, not a formal privacy guarantee.

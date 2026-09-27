@@ -26,4 +26,10 @@ def test_cors_allows_frontend_origin(client):
 def test_docs_available_outside_production(client):
     assert client.get("/docs").status_code == 200
     paths = client.get("/openapi.json").json()["paths"]
-    assert set(paths) == {"/health", "/health/db", "/api/v1/auth/login", "/api/v1/auth/me"}
+    assert set(paths) == {
+        "/health",
+        "/health/db",
+        "/api/v1/auth/login",
+        "/api/v1/auth/me",
+        "/api/v1/query",
+    }

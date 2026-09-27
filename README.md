@@ -6,8 +6,8 @@ enforces role-based access control, and runs **CAIR** (Conversation-Aware Infere
 Risk) analysis. CAIR detects when a *sequence* of individually harmless queries could
 reveal sensitive information. Only then is the query executed.
 
-> **Status:** Phase 3 of 14 (backend foundation: authentication and RBAC).
-> SQL generation, Claude integration and CAIR are not implemented yet.
+> **Status:** Phase 4 of 14 (secure natural-language-to-SQL pipeline).
+> CAIR inference detection (Phase 5) and the frontend are not implemented yet.
 
 See [docs/architecture.md](docs/architecture.md) for the design,
 [backend/README.md](backend/README.md) for the API, authentication and RBAC, and
@@ -118,6 +118,9 @@ cd C:\ASKQ
 - Secrets live only in `.env` (git-ignored). `.env.example` contains placeholders.
 - Passwords are stored as Argon2id hashes; access tokens are short-lived JWTs whose
   role is re-checked against the database on every request.
+- Claude's SQL is untrusted: it is parsed, validated against an allowlist,
+  row-scoped by the server for the user's role, bounded, and run only as the
+  read-only `askq_reader` account (see `backend/README.md`, "Query pipeline").
 - The backend uses two MySQL accounts that are never merged: `askq_app` for its own
   data and `askq_reader` (read-only) for organisational data.
 - LLM-generated SQL is never executed without validation, authorization and CAIR checks.

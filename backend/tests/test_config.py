@@ -17,6 +17,9 @@ def test_safe_defaults_without_env_file():
     assert s.cors_origin_list == ["http://localhost:5173"]
     # No fallback secrets: unset until configured.
     assert s.jwt_secret is None and s.db_app_password is None and s.db_reader_password is None
+    assert s.anthropic_api_key is None
+    assert s.anthropic_model == "claude-sonnet-5"
+    assert (s.sql_max_rows, s.sql_timeout_ms) == (500, 5000)
 
 
 def test_loads_existing_env_variable_names(tmp_path):
@@ -43,7 +46,7 @@ def test_loads_existing_env_variable_names(tmp_path):
 def test_secrets_are_masked_in_repr():
     s = make_settings()
     text = repr(s) + str(s)
-    for name in ("jwt_secret", "db_app_password", "db_reader_password"):
+    for name in ("jwt_secret", "db_app_password", "db_reader_password", "anthropic_api_key"):
         assert s.secret(name) not in text
 
 
@@ -70,9 +73,11 @@ def test_production_requires_every_secret():
             cors_origins="https://askq.example",
             db_app_password="change-me-app-password",
             db_reader_password=None,
+            anthropic_api_key="your-anthropic-api-key-here",
         )
     message = str(info.value)
     assert "DB_READER_PASSWORD" in message and "DB_APP_PASSWORD" in message
+    assert "ANTHROPIC_API_KEY" in message
 
 
 def test_production_requires_explicit_cors():
@@ -99,6 +104,11 @@ def test_production_requires_explicit_cors():
         ({"db_system_name": "askq_university"}, "must differ"),
         ({"db_university_name": "askq-university; DROP"}, "DB_UNIVERSITY_NAME"),
         ({"db_pool_size": 10, "db_max_overflow": 11}, "db_max_overflow"),
+        ({"anthropic_model": "claude opus; rm -rf"}, "ANTHROPIC_MODEL"),
+        ({"sql_max_rows": 0}, "sql_max_rows"),
+        ({"sql_max_rows": 100_000}, "sql_max_rows"),
+        ({"sql_timeout_ms": 10}, "sql_timeout_ms"),
+        ({"anthropic_timeout_seconds": 1}, "anthropic_timeout_seconds"),
     ],
 )
 def test_invalid_configuration_rejected(overrides, fragment):
