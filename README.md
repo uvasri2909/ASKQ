@@ -6,10 +6,12 @@ enforces role-based access control, and runs **CAIR** (Conversation-Aware Infere
 Risk) analysis. CAIR detects when a *sequence* of individually harmless queries could
 reveal sensitive information. Only then is the query executed.
 
-> **Status:** Phase 2 of 14 (MySQL schema and deterministic synthetic data).
-> Authentication, RBAC, CAIR and Claude integration are not implemented yet.
+> **Status:** Phase 3 of 14 (backend foundation: authentication and RBAC).
+> SQL generation, Claude integration and CAIR are not implemented yet.
 
-See [docs/architecture.md](docs/architecture.md) for the design.
+See [docs/architecture.md](docs/architecture.md) for the design,
+[backend/README.md](backend/README.md) for the API, authentication and RBAC, and
+[database/README.md](database/README.md) for the databases.
 
 ## Project layout
 
@@ -51,6 +53,12 @@ cd ..
 # 4. Databases: first set DB_READER_PASSWORD / DB_APP_PASSWORD in .env and
 #    create the askq_admin login path (both explained in database\README.md)
 powershell -ExecutionPolicy Bypass -File .\database\setup_db.ps1
+
+# 5. Authentication: set JWT_SECRET in .env (see .env.example), then give a
+#    user a password (hidden prompt; see backend\README.md)
+cd backend
+.\.venv\Scripts\python -m app.cli.set_password admin
+cd ..
 ```
 
 ## Running
@@ -78,8 +86,10 @@ The page shows **Backend status: Online** when both are running.
 ```powershell
 # Backend
 cd C:\ASKQ\backend
-.\.venv\Scripts\python -m pytest
-.\.venv\Scripts\python -m ruff check .
+.\.venv\Scripts\python -m pytest            # unit tests (no MySQL needed)
+.\.venv\Scripts\python -m pytest --mysql    # + integration tests against the local MySQL
+.\.venv\Scripts\python -m ruff check ..
+.\.venv\Scripts\python -m ruff format --check ..
 
 # Frontend
 cd C:\ASKQ\frontend
@@ -106,5 +116,9 @@ cd C:\ASKQ
 ## Security notes
 
 - Secrets live only in `.env` (git-ignored). `.env.example` contains placeholders.
+- Passwords are stored as Argon2id hashes; access tokens are short-lived JWTs whose
+  role is re-checked against the database on every request.
+- The backend uses two MySQL accounts that are never merged: `askq_app` for its own
+  data and `askq_reader` (read-only) for organisational data.
 - LLM-generated SQL is never executed without validation, authorization and CAIR checks.
 - CAIR is a heuristic, explainable risk detector, not a formal privacy guarantee.

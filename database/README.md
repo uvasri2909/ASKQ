@@ -91,12 +91,12 @@ Views (both `SQL SECURITY INVOKER`):
 
 | Table | Used from | Description |
 |---|---|---|
-| `app_user_credentials` | Phase 4 | Password hash and lockout state per `user_id` |
+| `app_user_credentials` | Phase 3 | Argon2id password hash, failed attempts, lock, last login per `user_id` |
 | `conversations`, `conversation_turns` | Phase 6+ | Chat sessions and the user's questions |
 | `query_history` | Phase 5+ | One row per pipeline run (see below) |
 | `cair_assessments`, `cair_audit_findings` | Phase 8-9 | Why CAIR decided (policy version, reasons); one finding per audit (the six attack classes) |
 | `cair_ledger_entries` | Phase 8-9 | Per-user knowledge ledger: query descriptor (JSON) + SHA-256 population fingerprint |
-| `security_audit_log` | Phase 4+ | Logins, denials, rejections, blocks |
+| `security_audit_log` | Phase 3+ | Logins (from Phase 3), denials, rejections, blocks |
 | `evaluation_runs`, `evaluation_results` | Phase 12 | Baseline vs CAIR runs, per-step expected/actual decisions |
 
 `user_id` columns here are logical references to `askq_university.users.user_id`.
@@ -201,7 +201,7 @@ The database records **who is who**; enforcement is the backend's (Phase 5).
 | TEACHER | 33 (`t0002`, ...) | Offerings they teach (`course_offerings.teacher_id`) and their advisees (`students.advisor_teacher_id`) |
 | STUDENT | 1,000 (`s20230001`, ...) | Their own rows (`users.student_id`) |
 
-Constraints are compatible with Phase 4 authentication:
+Constraints are compatible with the Phase 3 authentication (see `backend/README.md`):
 
 - `users` never stores secrets. Hashes go into `askq_system.app_user_credentials`, which `askq_app` can write.
 - `ck_users_role_links` fixes each role's link shape, and `ck_roles_id_code` pins the ids it relies on.
