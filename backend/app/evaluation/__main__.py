@@ -1,7 +1,8 @@
 """Run the CAIR scenarios against the local ASKQ MySQL and print the metrics.
 
     cd C:\\ASKQ\\backend
-    .venv\\Scripts\\python -m app.evaluation            # both modes, summary
+    .venv\\Scripts\\python -m app.evaluation            # CAIR and NO_CONTROL (B0), summary
+    .venv\\Scripts\\python -m app.evaluation --mode ALL # CAIR, K_ONLY (B1) and NO_CONTROL (B0)
     .venv\\Scripts\\python -m app.evaluation --steps    # plus every step
 
 Uses the real .env (values are never printed). All writes, including the
@@ -15,14 +16,30 @@ from dataclasses import asdict
 
 from app.config import get_settings
 from app.db.session import Database
-from app.evaluation.harness import BASELINE, CAIR, EvaluationHarness, compute_metrics
+from app.evaluation.harness import (
+    ARMS,
+    BASELINE,
+    CAIR,
+    K_ONLY,
+    NO_CONTROL,
+    EvaluationHarness,
+    compute_metrics,
+    get_arm,
+)
 from app.evaluation.scenarios import ALL
+
+SELECTIONS = {"BOTH": [CAIR, NO_CONTROL], "ALL": [CAIR, K_ONLY, NO_CONTROL]}
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="CAIR scenario evaluation (rolled back)")
     parser.add_argument("--steps", action="store_true", help="print every step")
-    parser.add_argument("--mode", choices=[CAIR, BASELINE, "BOTH"], default="BOTH")
+    parser.add_argument(
+        "--mode",
+        choices=[*ARMS, BASELINE, *SELECTIONS],
+        default="BOTH",
+        help="an arm (BASELINE = NO_CONTROL), BOTH (CAIR + NO_CONTROL) or ALL (three arms)",
+    )
     args = parser.parse_args(argv)
 
     settings = get_settings()
@@ -33,13 +50,13 @@ def main(argv: list[str] | None = None) -> int:
             outer = connection.begin()
             try:
                 harness = EvaluationHarness(connection, database, settings)
-                for mode in [CAIR, BASELINE] if args.mode == "BOTH" else [args.mode]:
-                    results = harness.run(ALL, mode)
-                    metrics = compute_metrics(mode, ALL, results)
-                    harness.record(mode, results, metrics)
-                    report[mode] = {"metrics": asdict(metrics)}
+                for arm in map(get_arm, SELECTIONS.get(args.mode, [args.mode])):
+                    results = harness.run(ALL, arm)
+                    metrics = compute_metrics(arm, ALL, results)
+                    harness.record(arm, results, metrics)
+                    report[arm.id] = {"description": arm.description, "metrics": asdict(metrics)}
                     if args.steps:
-                        report[mode]["steps"] = [
+                        report[arm.id]["steps"] = [
                             {k: v for k, v in asdict(r).items() if k != "response"} for r in results
                         ]
             finally:

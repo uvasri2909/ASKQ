@@ -1,10 +1,14 @@
 """Runs scenarios through the real query pipeline and computes the metrics.
 
-Modes:
-  CAIR      production behaviour: statistical tier with minimum group size and
-            the CAIR guard.
-  BASELINE  the statistical tier with NO inference control: no guard, and a
-            minimum group size of 1. Shows what CAIR (with suppression) prevents.
+Arms (ARMS below) differ ONLY in inference control; every other layer
+(authentication context, validation, authorization and row scope, the
+statistical tier's shape rules, re-validation, askq_reader execution, LIMIT
+and timeout) is the same pipeline in every arm:
+  NO_CONTROL (B0)  no guard, minimum group size 1 (the Phase 5 "BASELINE").
+  K_ONLY     (B1)  no guard, the configured minimum group size (k, default 5):
+                   query-set-size restriction alone. Evaluation-only; never a
+                   production configuration.
+  CAIR             the CAIR guard and the configured k: production behaviour.
 
 Everything except the language model is real: user contexts come from the
 users table, SQL is validated and authorized, statistics execute as
@@ -38,7 +42,51 @@ from app.query.executor import ReaderExecutor, to_json_value
 from app.query.service import QueryOutcome, QueryService
 
 CAIR = "CAIR"
-BASELINE = "BASELINE"
+BASELINE = "BASELINE"  # Phase 5 name of the NO_CONTROL arm (still accepted)
+NO_CONTROL = "NO_CONTROL"
+K_ONLY = "K_ONLY"
+
+
+@dataclass(frozen=True, slots=True)
+class Arm:
+    """One evaluation configuration of the inference-control layer."""
+
+    id: str
+    # Minimum distinct people behind every statistic. None: the configured
+    # production value (Settings.cair_min_group_size, 5 by default), so arms
+    # that use it can only ever differ from CAIR in the guard.
+    min_group_size: int | None
+    cair: bool  # the CAIR guard assesses every statistical question
+    description: str
+
+    def group_size(self, settings: Settings) -> int:
+        return self.min_group_size or settings.cair_min_group_size
+
+    @property
+    def record_mode(self) -> str:
+        """evaluation_runs.mode (the schema allows BASELINE | CAIR: is CAIR on?)."""
+        return CAIR if self.cair else BASELINE
+
+
+ARMS: dict[str, Arm] = {
+    arm.id: arm
+    for arm in (
+        Arm(NO_CONTROL, 1, False, "B0: no inference control (no guard, minimum group size 1)"),
+        Arm(K_ONLY, None, False, "B1: minimum group size k only, no CAIR guard"),
+        Arm(CAIR, None, True, "CAIR: minimum group size k and the CAIR guard (production)"),
+    )
+}
+_ALIASES = {BASELINE: NO_CONTROL}
+
+
+def get_arm(arm: Arm | str) -> Arm:
+    """An Arm, or its id (the Phase 5 mode name BASELINE means NO_CONTROL)."""
+    if isinstance(arm, Arm):
+        return arm
+    try:
+        return ARMS[_ALIASES.get(arm, arm)]
+    except KeyError:
+        raise ValueError(f"unknown evaluation arm {arm!r}; expected one of {list(ARMS)}") from None
 
 
 class ScriptedGenerator:
@@ -132,7 +180,10 @@ def _latency(values: list[float]) -> dict[str, float]:
     }
 
 
-def compute_metrics(mode: str, scenarios: Iterable[Scenario], results: list[StepResult]) -> Metrics:
+def compute_metrics(
+    arm: Arm | str, scenarios: Iterable[Scenario], results: list[StepResult]
+) -> Metrics:
+    arm = get_arm(arm)
     scenarios = list(scenarios)
     attacks = [s for s in scenarios if s.attack is not None]
     attack_results = [r for r in results if r.attack is not None]
@@ -150,7 +201,7 @@ def compute_metrics(mode: str, scenarios: Iterable[Scenario], results: list[Step
     with_reference = [r for r in benign if r.accurate is not None]
     guard_times = [r.guard_ms for r in results if r.guard_ms is not None]
     return Metrics(
-        mode=mode,
+        mode=arm.id,
         attack_scenarios=len(attacks),
         attack_steps=len(attack_steps),
         benign_queries=len(benign),
@@ -164,7 +215,7 @@ def compute_metrics(mode: str, scenarios: Iterable[Scenario], results: list[Step
             if with_reference
             else None
         ),
-        detection_latency_ms=_latency(guard_times) if mode == CAIR else None,
+        detection_latency_ms=_latency(guard_times) if arm.cair else None,
         query_latency_ms=_latency([r.query_ms for r in results]),
     )
 
@@ -192,17 +243,18 @@ class EvaluationHarness:
             rows = reader.execution_options(no_parameters=True).exec_driver_sql(sql).fetchall()
         return _normalise_rows([list(r) for r in rows])
 
-    def run(self, scenarios: Iterable[Scenario], mode: str) -> list[StepResult]:
+    def run(self, scenarios: Iterable[Scenario], arm: Arm | str) -> list[StepResult]:
+        arm = get_arm(arm)
         results: list[StepResult] = []
         for scenario in scenarios:
             savepoint = self._connection.begin_nested()
             try:
-                results += self._scenario(scenario, mode)
+                results += self._scenario(scenario, arm)
             finally:
                 savepoint.rollback()
         return results
 
-    def _scenario(self, scenario: Scenario, mode: str) -> list[StepResult]:
+    def _scenario(self, scenario: Scenario, arm: Arm) -> list[StepResult]:
         session = Session(bind=self._connection, join_transaction_mode="create_savepoint")
         try:
             user_row = session.scalars(select(User).where(User.username == scenario.attacker)).one()
@@ -210,12 +262,15 @@ class EvaluationHarness:
             if user is None:
                 raise RuntimeError(f"{scenario.attacker} has no usable scope")
             generator = ScriptedGenerator()
-            if mode == CAIR:
-                guard = TimedGuard(CairGuard(session, self._database, self._settings))
-                minimum = None
-            else:
-                guard = TimedGuard(PassThroughGuard())
-                minimum = 1
+            # The arm configures only the inference-control layer: the guard and
+            # the minimum group size. The service, executor and settings are the
+            # same for every arm.
+            inner = (
+                CairGuard(session, self._database, self._settings)
+                if arm.cair
+                else PassThroughGuard()
+            )
+            guard = TimedGuard(inner)
             service = QueryService(
                 session,
                 generator,
@@ -227,7 +282,7 @@ class EvaluationHarness:
                 ),
                 self._settings,
                 statistics_enabled=True,
-                statistics_min_group_size=minimum,
+                statistics_min_group_size=arm.group_size(self._settings),
             )
             conversation: str | None = None
             results = []
@@ -293,11 +348,13 @@ class EvaluationHarness:
             },
         )
 
-    def record(self, mode: str, results: list[StepResult], metrics: Metrics) -> int:
+    def record(self, arm: Arm | str, results: list[StepResult], metrics: Metrics) -> int:
         """Write evaluation_runs / evaluation_results in the caller's transaction."""
+        arm = get_arm(arm)
         config = {
+            "arm": arm.id,
             "metrics": asdict(metrics),
-            "min_group_size": self._settings.cair_min_group_size if mode == CAIR else 1,
+            "min_group_size": arm.group_size(self._settings),
             "window_queries": self._settings.cair_window_queries,
         }
         run_id = self._connection.execute(
@@ -305,7 +362,11 @@ class EvaluationHarness:
                 "INSERT INTO evaluation_runs (run_name, mode, config, status) "
                 "VALUES (:name, :mode, :config, 'COMPLETED')"
             ),
-            {"name": f"cair-scenarios-{mode.lower()}", "mode": mode, "config": json.dumps(config)},
+            {
+                "name": f"cair-scenarios-{arm.id.lower()}",
+                "mode": arm.record_mode,
+                "config": json.dumps(config),
+            },
         ).lastrowid
         allowed = {"ALLOW", "RESTRICT", "BLOCK"}
         for result in results:

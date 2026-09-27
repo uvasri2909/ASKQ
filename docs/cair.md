@@ -252,15 +252,25 @@ Each scenario runs in its own savepoint, and the whole run is rolled back.
 
 ```powershell
 cd C:\ASKQ\backend
-.\.venv\Scripts\python -m app.evaluation            # CAIR and BASELINE
+.\.venv\Scripts\python -m app.evaluation            # CAIR and NO_CONTROL (B0)
+.\.venv\Scripts\python -m app.evaluation --mode ALL # CAIR, K_ONLY (B1) and NO_CONTROL (B0)
 .\.venv\Scripts\python -m app.evaluation --steps    # plus every step
 ```
 
-The two modes:
-- **CAIR:** production behaviour.
-- **BASELINE:** the statistical tier with **no inference control**: no guard,
-  and a minimum group size of 1. It shows what CAIR, including suppression,
-  prevents.
+The arms (`ARMS` in `harness.py`, Phase 7A) differ **only** in inference
+control. Validation, authorization and row scope, the statistical tier's shape
+rules, re-validation, askq_reader execution, LIMIT and timeout are the same
+pipeline in every arm (`tests/integration/test_evaluation_arms_mysql.py`).
+
+| Arm | Minimum group size | CAIR guard | Meaning |
+|---|---|---|---|
+| **NO_CONTROL** (B0) | 1 | no | No inference control. This is the Phase 5 **BASELINE** (that name still works). |
+| **K_ONLY** (B1) | k (`CAIR_MIN_GROUP_SIZE`, 5) | no | Query-set-size restriction alone. Evaluation-only, never a production configuration. |
+| **CAIR** | k (the same setting) | yes | Production behaviour. |
+
+B0 to B1 isolates what the minimum group size contributes, and B1 to CAIR what
+CAIR adds on top. Results with K_ONLY will be reported in Phase 7; the table
+below is the Phase 5 run (CAIR and B0, which Phase 7A reproduces exactly).
 
 **Metrics** (`harness.py`). An *attack step* is a step whose answer would leak
 (ground truth in the scenario); a *benign query* is any step of a benign
