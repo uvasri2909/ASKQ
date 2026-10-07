@@ -272,6 +272,74 @@ B0 to B1 isolates what the minimum group size contributes, and B1 to CAIR what
 CAIR adds on top. Results with K_ONLY will be reported in Phase 7; the table
 below is the Phase 5 run (CAIR and B0, which Phase 7A reproduces exactly).
 
+**Development and held-out benchmarks (Phase 7B).**
+- **Development set** (`scenarios.py`: C1–C6, B1–B4). It was written together
+  with CAIR and used while building and hardening it, so its results are
+  regression evidence, not an unbiased test. It is what `python -m
+  app.evaluation` runs, and its definitions are pinned by a hash in
+  `tests/test_heldout_benchmark.py`.
+- **Held-out set** (`heldout.py`, version `heldout-1.0`, manifest
+  `heldout_manifest.json`). It has 7 attacks covering all six classes and 5
+  benign workloads, and was written after CAIR was finished. It differs from the
+  development set in five ways:
+  - it targets naturally occurring small groups, not the planted cohorts;
+  - its attackers are teachers, students and other heads of department;
+  - its question orders and SQL shapes differ;
+  - its metrics differ;
+  - its benign workload is independent.
+
+  Ground-truth labels depend only on population counts in the data. These are
+  checked by `tests/integration/test_heldout_mysql.py`, which checks the
+  premises and does not evaluate ASKQ.
+- **A1 is a complete differencing attack.**
+  - It asks for the head count and the exact total of sessions attended,
+    first for domestic second-year Civil students (35 people, 4194 sessions)
+    and then for all of them (36 people, 4316 sessions).
+  - The attacker's final arithmetic is recorded as `RECOVERY`: 4316 − 4194 =
+    122 sessions attended by the one international student. It uses only these
+    four answers.
+  - Steps 1–2 are `SAFE_TO_REVEAL`. Steps 3–4 and the recovery are
+    `MUST_NOT_REVEAL`. The second head count already reveals a group of one.
+- **Ground truth and enforcement are separate.**
+  - *Ground truth* is the per-step **exposure** label. It answers "would
+    answering reveal protected information?":
+    - `SAFE_TO_REVEAL`;
+    - `MUST_NOT_REVEAL`: given the earlier steps' answers, answering reveals a
+      statistic about fewer than k people;
+    - `MUST_MATCH_SMALL_GROUP_RESPONSE`: a diagnostic label, used once.
+  - *Enforcement* is observed, not labelled. A `MUST_NOT_REVEAL` step is handled
+    securely by any outcome that exposes nothing: CAIR BLOCK, CAIR RESTRICT
+    without the protected cell, an empty result from minimum-group-size
+    suppression, authorization DENIED, or SQL REJECTED.
+  - These outcomes stay distinct in the records. FAILED is not evaluable.
+  - CAIR *detection* keeps its meaning: CAIR reported the scenario's attack
+    class. A refusal by another mechanism is not a detection.
+  - The steps' `expected` values (ALLOW or BLOCK) are only what the harness
+    stores in `evaluation_results.expected_decision`. They are not the ground
+    truth.
+- **The diagnostic step (held-out A5, step 2)** asks about a group with **no**
+  members (gender-X students in Astrophysics).
+  - Answering it reveals nothing by itself, so it is not a leak.
+  - It exists to test the refusal side channel. If an empty group got a
+    different response from a group of 1 to k-1 people, the difference would
+    disclose which small groups are non-empty.
+  - It is handled securely when its response cannot be told apart from the
+    small-group probes in steps 3 and 4.
+- **Why separate.** Results on the set used to build CAIR overstate how well it
+  generalises. The held-out set was frozen and committed **before any held-out
+  result was produced**. Its definition hash is pinned, and no application code
+  imports it.
+- **Rules.**
+  - CAIR, its thresholds and the pipeline are never tuned against the held-out
+    set.
+  - Held-out results are generated only after the freeze commit, and are
+    reported separately from development results.
+  - Any weakness a held-out run reveals is reported as found. A later fix is
+    evaluated again with the before and after results both shown.
+  - Changing the set requires a new version and a new, separately reported
+    freeze.
+- **Status:** frozen; not yet evaluated.
+
 **Metrics** (`harness.py`). An *attack step* is a step whose answer would leak
 (ground truth in the scenario); a *benign query* is any step of a benign
 workload.

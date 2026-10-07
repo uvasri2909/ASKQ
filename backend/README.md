@@ -59,7 +59,8 @@ app/
 │   ├── detectors.py   the six audits over populations
 │   ├── scoring.py     risk, ALLOW / RESTRICT / BLOCK, complementary suppression
 │   └── guard.py       CairGuard (the pipeline's InferenceGuard)
-├── evaluation/        scenarios C1-C6 + benign workloads, harness, metrics (python -m app.evaluation)
+├── evaluation/        scenarios C1-C6 + benign workloads, harness, metrics (python -m app.evaluation);
+│                      heldout.py = frozen held-out set (not imported by the app; docs/cair.md)
 └── cli/set_password.py  provision a user's password (run by hand)
 ```
 

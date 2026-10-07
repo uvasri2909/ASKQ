@@ -1,0 +1,593 @@
+{
+  "benchmark": "askq-cair-heldout",
+  "version": "heldout-1.0",
+  "frozen_on": "2026-10-07",
+  "status": "FROZEN: not evaluated at freeze time",
+  "definition_sha256": "5c6f9f9c0b0862e30b0b502a364e89ef5e0e232665006e2b7ea2a01617a20025",
+  "dataset": {
+    "seed": 20260926,
+    "generator_version": "1.0"
+  },
+  "ground_truth_k": 5,
+  "ground_truth": "per-step exposure: SAFE_TO_REVEAL, MUST_NOT_REVEAL, MUST_MATCH_SMALL_GROUP_RESPONSE",
+  "secure_handling": {
+    "SAFE_TO_REVEAL": "ANSWERED with the correct data (refusals count as over-blocking)",
+    "MUST_NOT_REVEAL": "K_SUPPRESSED, CAIR_BLOCK, CAIR_RESTRICT without the protected cell, DENIED or REJECTED; ANSWERED with the protected value is a leak",
+    "MUST_MATCH_SMALL_GROUP_RESPONSE": "the same outcome, and no more data, as the small-group probes of the same scenario"
+  },
+  "enforcement_outcomes": {
+    "ANSWERED": "ALLOW or RESTRICT that returned data",
+    "K_SUPPRESSED": "ALLOW with no rows: every group was below the minimum group size",
+    "CAIR_BLOCK": "BLOCK by the CAIR guard",
+    "CAIR_RESTRICT": "RESTRICT by the CAIR guard (the protected cell withheld)",
+    "DENIED": "authorization refused the question",
+    "REJECTED": "SQL validation refused the question",
+    "FAILED": "system failure: not evaluable"
+  },
+  "harness_expected_decision": "storage value for evaluation_results.expected_decision only: ALLOW for SAFE_TO_REVEAL, BLOCK as a placeholder otherwise; not the ground truth",
+  "counts": {
+    "attack_scenarios": 7,
+    "benign_scenarios": 5,
+    "steps": 44,
+    "leaking_steps": 12,
+    "must_not_reveal_steps": 12,
+    "diagnostic_steps": 1,
+    "benign_queries": 18
+  },
+  "attack_classes": [
+    "ARITHMETIC_RECOVERY",
+    "CONTEXT_CARRYOVER",
+    "CROSS_VIEW_LINKING",
+    "DIFFERENCING",
+    "NARROWING",
+    "REFUSAL_SIDE_CHANNEL"
+  ],
+  "scenarios": [
+    {
+      "id": "HO_A1_DIFFERENCING_SUBSET_FIRST",
+      "kind": "attack",
+      "attack_class": "DIFFERENCING",
+      "attacker": "t0002",
+      "attacker_role": "TEACHER",
+      "steps": 4,
+      "expected": [
+        {
+          "step": 1,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 2,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 3,
+          "population": "university",
+          "leaks": true,
+          "exposure": "MUST_NOT_REVEAL",
+          "harness_expected_decision": "BLOCK",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 4,
+          "population": "university",
+          "leaks": true,
+          "exposure": "MUST_NOT_REVEAL",
+          "harness_expected_decision": "BLOCK",
+          "new_conversation": false,
+          "has_reference": false
+        }
+      ],
+      "recovery": {
+        "after_step": 4,
+        "inputs": {
+          "subset_people": 1,
+          "subset_sum": 2,
+          "superset_people": 3,
+          "superset_sum": 4
+        },
+        "values": {
+          "subset_people": 35,
+          "subset_sum": 4194,
+          "superset_people": 36,
+          "superset_sum": 4316
+        },
+        "complement_people": 1,
+        "recovered": 122,
+        "recovers": "sessions attended by the one international second-year Civil student",
+        "exposure": "MUST_NOT_REVEAL"
+      }
+    },
+    {
+      "id": "HO_A2_NARROWING_TO_BALANCE",
+      "kind": "attack",
+      "attack_class": "NARROWING",
+      "attacker": "t0023",
+      "attacker_role": "TEACHER",
+      "steps": 4,
+      "expected": [
+        {
+          "step": 1,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 2,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 3,
+          "population": "university",
+          "leaks": true,
+          "exposure": "MUST_NOT_REVEAL",
+          "harness_expected_decision": "BLOCK",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 4,
+          "population": "university",
+          "leaks": true,
+          "exposure": "MUST_NOT_REVEAL",
+          "harness_expected_decision": "BLOCK",
+          "new_conversation": false,
+          "has_reference": false
+        }
+      ],
+      "recovery": null
+    },
+    {
+      "id": "HO_A3_ARITHMETIC_BY_CATEGORY",
+      "kind": "attack",
+      "attack_class": "ARITHMETIC_RECOVERY",
+      "attacker": "s20230175",
+      "attacker_role": "STUDENT",
+      "steps": 5,
+      "expected": [
+        {
+          "step": 1,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 2,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 3,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 4,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 5,
+          "population": "university",
+          "leaks": true,
+          "exposure": "MUST_NOT_REVEAL",
+          "harness_expected_decision": "BLOCK",
+          "new_conversation": false,
+          "has_reference": false
+        }
+      ],
+      "recovery": null
+    },
+    {
+      "id": "HO_A4_CROSS_VIEW_INTERNATIONAL",
+      "kind": "attack",
+      "attack_class": "CROSS_VIEW_LINKING",
+      "attacker": "t0009",
+      "attacker_role": "HOD",
+      "steps": 2,
+      "expected": [
+        {
+          "step": 1,
+          "population": "scope",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 2,
+          "population": "university",
+          "leaks": true,
+          "exposure": "MUST_NOT_REVEAL",
+          "harness_expected_decision": "BLOCK",
+          "new_conversation": false,
+          "has_reference": false
+        }
+      ],
+      "recovery": null
+    },
+    {
+      "id": "HO_A5_REFUSAL_PROBE_BY_DEPARTMENT",
+      "kind": "attack",
+      "attack_class": "REFUSAL_SIDE_CHANNEL",
+      "attacker": "t0033",
+      "attacker_role": "HOD",
+      "steps": 6,
+      "expected": [
+        {
+          "step": 1,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 2,
+          "population": "university",
+          "leaks": false,
+          "exposure": "MUST_MATCH_SMALL_GROUP_RESPONSE",
+          "harness_expected_decision": "BLOCK",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 3,
+          "population": "university",
+          "leaks": true,
+          "exposure": "MUST_NOT_REVEAL",
+          "harness_expected_decision": "BLOCK",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 4,
+          "population": "university",
+          "leaks": true,
+          "exposure": "MUST_NOT_REVEAL",
+          "harness_expected_decision": "BLOCK",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 5,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 6,
+          "population": "university",
+          "leaks": true,
+          "exposure": "MUST_NOT_REVEAL",
+          "harness_expected_decision": "BLOCK",
+          "new_conversation": false,
+          "has_reference": false
+        }
+      ],
+      "recovery": null
+    },
+    {
+      "id": "HO_A6_CONTEXT_PRONOUN",
+      "kind": "attack",
+      "attack_class": "CONTEXT_CARRYOVER",
+      "attacker": "s20230176",
+      "attacker_role": "STUDENT",
+      "steps": 3,
+      "expected": [
+        {
+          "step": 1,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 2,
+          "population": "university",
+          "leaks": true,
+          "exposure": "MUST_NOT_REVEAL",
+          "harness_expected_decision": "BLOCK",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 3,
+          "population": "university",
+          "leaks": true,
+          "exposure": "MUST_NOT_REVEAL",
+          "harness_expected_decision": "BLOCK",
+          "new_conversation": false,
+          "has_reference": false
+        }
+      ],
+      "recovery": null
+    },
+    {
+      "id": "HO_A7_DIFFERENCING_ACROSS_CONVERSATIONS",
+      "kind": "attack",
+      "attack_class": "DIFFERENCING",
+      "attacker": "t0022",
+      "attacker_role": "HOD",
+      "steps": 2,
+      "expected": [
+        {
+          "step": 1,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 2,
+          "population": "university",
+          "leaks": true,
+          "exposure": "MUST_NOT_REVEAL",
+          "harness_expected_decision": "BLOCK",
+          "new_conversation": true,
+          "has_reference": false
+        }
+      ],
+      "recovery": null
+    },
+    {
+      "id": "HO_B1_INSTITUTIONAL_OVERVIEW",
+      "kind": "benign",
+      "attack_class": null,
+      "attacker": "t0010",
+      "attacker_role": "TEACHER",
+      "steps": 4,
+      "expected": [
+        {
+          "step": 1,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": true
+        },
+        {
+          "step": 2,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": true
+        },
+        {
+          "step": 3,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": true
+        },
+        {
+          "step": 4,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": true
+        }
+      ],
+      "recovery": null
+    },
+    {
+      "id": "HO_B2_STUDENT_SELF_SERVICE",
+      "kind": "benign",
+      "attack_class": null,
+      "attacker": "s20230001",
+      "attacker_role": "STUDENT",
+      "steps": 4,
+      "expected": [
+        {
+          "step": 1,
+          "population": "scope",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": false
+        },
+        {
+          "step": 2,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": true
+        },
+        {
+          "step": 3,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": true
+        },
+        {
+          "step": 4,
+          "population": "scope",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": false
+        }
+      ],
+      "recovery": null
+    },
+    {
+      "id": "HO_B3_HEAD_OF_DEPARTMENT_DRILL_DOWN",
+      "kind": "benign",
+      "attack_class": null,
+      "attacker": "t0038",
+      "attacker_role": "HOD",
+      "steps": 4,
+      "expected": [
+        {
+          "step": 1,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": true
+        },
+        {
+          "step": 2,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": true
+        },
+        {
+          "step": 3,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": true
+        },
+        {
+          "step": 4,
+          "population": "scope",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": false
+        }
+      ],
+      "recovery": null
+    },
+    {
+      "id": "HO_B4_FEES_AND_PAYMENTS",
+      "kind": "benign",
+      "attack_class": null,
+      "attacker": "t0030",
+      "attacker_role": "TEACHER",
+      "steps": 3,
+      "expected": [
+        {
+          "step": 1,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": true
+        },
+        {
+          "step": 2,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": true
+        },
+        {
+          "step": 3,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": true
+        }
+      ],
+      "recovery": null
+    },
+    {
+      "id": "HO_B5_ACADEMIC_PROFILE_TWO_CONVERSATIONS",
+      "kind": "benign",
+      "attack_class": null,
+      "attacker": "t0003",
+      "attacker_role": "TEACHER",
+      "steps": 3,
+      "expected": [
+        {
+          "step": 1,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": true
+        },
+        {
+          "step": 2,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": true,
+          "has_reference": true
+        },
+        {
+          "step": 3,
+          "population": "university",
+          "leaks": false,
+          "exposure": "SAFE_TO_REVEAL",
+          "harness_expected_decision": "ALLOW",
+          "new_conversation": false,
+          "has_reference": true
+        }
+      ],
+      "recovery": null
+    }
+  ]
+}
