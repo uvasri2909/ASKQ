@@ -161,6 +161,10 @@ def test_login_and_me_end_to_end(settings, database):
     outer = connection.begin()
     try:
         session = Session(bind=connection, join_transaction_mode="create_savepoint")
+        # The audit log keeps earlier real activity; only rows after this mark are ours.
+        last_audit_id = session.execute(
+            text("SELECT COALESCE(MAX(audit_id), 0) FROM security_audit_log")
+        ).scalar_one()
 
         # One real account per role, straight from the seeded data.
         picked: dict[Role, User] = {}
@@ -205,7 +209,11 @@ def test_login_and_me_end_to_end(settings, database):
         hod = build_user_context(session, picked[Role.HOD])
         assert hod is not None and hod.scope.department_id == hod_department
         events = session.execute(
-            text("SELECT event_type, COUNT(*) FROM security_audit_log GROUP BY event_type")
+            text(
+                "SELECT event_type, COUNT(*) FROM security_audit_log "
+                "WHERE audit_id > :last GROUP BY event_type"
+            ),
+            {"last": last_audit_id},
         ).all()
         assert dict(events) == {"LOGIN_SUCCEEDED": 4, "LOGIN_FAILED": 1}
         session.close()

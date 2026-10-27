@@ -124,10 +124,12 @@ TABLES: tuple[TableSpec, ...] = (
     ),
     TableSpec(
         "course_offerings",
-        "A section of a course in a term, taught by one teacher.",
+        "A section of a course in a term, taught by one teacher. Has NO department_id:"
+        " an offering's department is courses.department_id, via"
+        " course_offerings.course_id = courses.course_id.",
         (
             _c("offering_id", "INT", "primary key"),
-            _c("course_id", "SMALLINT", "-> courses"),
+            _c("course_id", "SMALLINT", "-> courses (gives the department)"),
             _c("term_id", "SMALLINT", "-> academic_terms"),
             _c("section_code", "CHAR(1)"),
             _c("teacher_id", "INT", "-> teachers"),

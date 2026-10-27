@@ -7,6 +7,9 @@ schema_translate_map as production.
 
 Tests marked `mysql` (tests/integration) use the local ASKQ MySQL instance and
 the real .env. They are skipped unless pytest runs with --mysql.
+
+Tests marked `ollama` call a local Ollama server (the real .env's OLLAMA_*
+settings). They are skipped unless pytest runs with --ollama.
 """
 
 import secrets
@@ -40,19 +43,29 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         help="also run integration tests against the local ASKQ MySQL (uses the real .env)",
     )
+    parser.addoption(
+        "--ollama",
+        action="store_true",
+        help="also run live smoke tests against the local Ollama server (uses the real .env)",
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "mysql: needs the local ASKQ MySQL; run with --mysql")
+    config.addinivalue_line("markers", "ollama: needs a local Ollama server; run with --ollama")
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    if config.getoption("--mysql"):
-        return
-    skip = pytest.mark.skip(reason="MySQL integration test; run with --mysql")
-    for item in items:
-        if "mysql" in item.keywords:
-            item.add_marker(skip)
+    for marker, option, reason in (
+        ("mysql", "--mysql", "MySQL integration test; run with --mysql"),
+        ("ollama", "--ollama", "live Ollama smoke test; run with --ollama"),
+    ):
+        if config.getoption(option):
+            continue
+        skip = pytest.mark.skip(reason=reason)
+        for item in items:
+            if marker in item.keywords:
+                item.add_marker(skip)
 
 
 def make_settings(**overrides: object) -> Settings:

@@ -3,9 +3,12 @@
 Statement spies on the two engines prove where model-derived SQL goes.
 """
 
+import json
 import uuid
 from collections.abc import Iterator
+from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import event, select
@@ -18,6 +21,8 @@ from app.db.models import (
     QueryHistory,
     SecurityAuditEvent,
 )
+from app.llm.claude import ClaudeSqlGenerator
+from app.llm.ollama import OllamaSqlGenerator
 from app.llm.sql_generator import (
     ChartHint,
     GeneratedSql,
@@ -161,6 +166,101 @@ def test_unconfigured_claude_is_503(database):
         response = ask(client, ACCOUNTS.admin)
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "service_unavailable"
+
+
+# ---------- LLM provider (LLM_PROVIDER) ----------
+
+
+def _generator_for(settings, database):
+    app = create_app(settings, database)
+    return get_sql_generator(SimpleNamespace(app=app))
+
+
+def test_default_provider_is_claude(database):
+    assert isinstance(_generator_for(make_settings(), database), ClaudeSqlGenerator)
+
+
+def test_ollama_provider_needs_no_anthropic_key(database):
+    settings = make_settings(llm_provider="ollama", anthropic_api_key=None)
+    assert isinstance(_generator_for(settings, database), OllamaSqlGenerator)
+
+
+def _ollama_answering(sql: str | Exception) -> OllamaSqlGenerator:
+    """The real Ollama generator over a mock transport (no Ollama server needed)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if isinstance(sql, Exception):
+            raise sql
+        answer = {
+            "resolved_question": "How many students?",
+            "sql": sql,
+            "explanation": "Counts students.",
+            "chart": {"type": "number", "x": "", "y": "n"},
+            "population": "scope",
+        }
+        return httpx.Response(
+            200, json={"message": {"role": "assistant", "content": json.dumps(answer)}}
+        )
+
+    client = httpx.Client(base_url="http://127.0.0.1:11434", transport=httpx.MockTransport(handler))
+    return OllamaSqlGenerator(
+        client, "qwen2.5-coder:7b", num_ctx=8192, max_tokens=2048, temperature=0.0
+    )
+
+
+@pytest.fixture
+def ollama_box() -> dict:
+    return {"generator": _ollama_answering("SELECT COUNT(*) AS n FROM students")}
+
+
+@pytest.fixture
+def oclient(database, ollama_box, spies) -> Iterator[TestClient]:
+    settings = make_settings(llm_provider="ollama", anthropic_api_key=None)
+    app = create_app(settings, database)
+    app.dependency_overrides[get_inference_guard] = lambda: PassThroughGuard()
+    with TestClient(app) as client:
+        # Through the real get_sql_generator dependency, which reuses this instance.
+        app.state.sql_generator = ollama_box["generator"]
+        yield client
+
+
+@pytest.mark.parametrize(
+    ("user_id", "expected"),
+    [(ACCOUNTS.admin, 3), (ACCOUNTS.hod, 2), (ACCOUNTS.teacher, 2), (ACCOUNTS.student, 1)],
+)
+def test_ollama_sql_gets_the_same_row_scope(oclient, user_id, expected, spies):
+    body = ask(oclient, user_id).json()
+    assert body["decision"] == "ALLOW" and body["rows"] == [[expected]]
+    assert "sql" not in body
+    assert reader_ran(spies)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "DELETE FROM students",
+        "SELECT * FROM students; DROP TABLE students",
+        "SELECT * FROM askq_system.app_user_credentials",
+        "SELECT SLEEP(5) FROM students",
+    ],
+)
+def test_ollama_sql_is_untrusted(oclient, ollama_box, spies, db_session, sql):
+    ollama_box["generator"] = _ollama_answering(sql)
+    oclient.app.state.sql_generator = ollama_box["generator"]
+    body = ask(oclient, ACCOUNTS.admin).json()
+    assert body["decision"] == "REJECTED"
+    assert "sql" not in body and body["rows"] == []
+    assert reader_ran(spies) == []
+    assert audit_events(db_session) == ["QUERY_REJECTED"]
+
+
+def test_ollama_unreachable_is_a_recorded_failure(oclient, db_session):
+    oclient.app.state.sql_generator = _ollama_answering(httpx.ConnectError("refused"))
+    body = ask(oclient, ACCOUNTS.admin).json()
+    assert body["decision"] == "FAILED" and "reason_code" not in body
+    assert "refused" not in json.dumps(body)
+    (row,) = history(db_session)
+    assert (row.failure_stage, row.error_code) == ("GENERATION", "LLM_UNAVAILABLE")
 
 
 # ---------- ALLOW ----------

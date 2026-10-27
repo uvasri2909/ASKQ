@@ -16,6 +16,7 @@ from app.cair.guard import PUBLIC_REASONS, RECORD_REASON, CairGuard
 from app.db.session import get_app_session
 from app.errors import ErrorResponse
 from app.llm.claude import ClaudeSqlGenerator
+from app.llm.ollama import OllamaSqlGenerator
 from app.llm.sql_generator import SqlGenerator
 from app.query.decision import PASSTHROUGH_REASON, InferenceGuard, PassThroughGuard
 from app.query.executor import ReaderExecutor
@@ -31,11 +32,19 @@ can_ask = require_permission(Permission.ASK_QUESTIONS)
 
 
 def get_sql_generator(request: Request) -> SqlGenerator:
-    """One generator per app. Raises ConfigurationError (-> 503) without ANTHROPIC_API_KEY."""
+    """One generator per app, chosen by LLM_PROVIDER.
+
+    Claude raises ConfigurationError (-> 503) without ANTHROPIC_API_KEY; Ollama
+    needs no key. Either way the generated SQL goes through the same pipeline.
+    """
     state = request.app.state
     generator = getattr(state, "sql_generator", None)
     if generator is None:
-        generator = ClaudeSqlGenerator.from_settings(state.settings)
+        settings = state.settings
+        if settings.llm_provider == "ollama":
+            generator = OllamaSqlGenerator.from_settings(settings)
+        else:
+            generator = ClaudeSqlGenerator.from_settings(settings)
         state.sql_generator = generator
     return generator
 

@@ -5,7 +5,8 @@ The ASKQ FastAPI service.
 - **Phase 3** added the foundation: configuration, the two database connections,
   Argon2id passwords, JWT authentication, and role-based access control with a
   data-scope model.
-- **Phase 4** adds the natural-language query pipeline: Claude drafts SQL, and the
+- **Phase 4** adds the natural-language query pipeline: a language model
+  (Claude, or a local model via Ollama; `LLM_PROVIDER`) drafts SQL, and the
   server validates it, authorizes it with row scope, bounds it and runs it as
   `askq_reader`, recording every step.
 - **Phase 5** adds CAIR (`app/cair/`), plugged into the guard hook. It comes with
@@ -40,7 +41,9 @@ app/
 │   └── repositories/  users, credentials, audit
 ├── llm/
 │   ├── sql_generator.py SqlGenerator protocol, GeneratedSql contract, error codes
-│   └── claude.py      the only module that imports the Anthropic SDK
+│   ├── prompt.py      the shared prompt: instructions, role schema, user message
+│   ├── claude.py      LLM_PROVIDER=claude; the only module that imports the Anthropic SDK
+│   └── ollama.py      LLM_PROVIDER=ollama; a local Ollama server (POST /api/chat)
 ├── query/
 │   ├── catalog.py     the queryable tables/views (application-controlled metadata)
 │   ├── policy.py      per-role tables, hidden columns, row-scope templates
@@ -96,8 +99,13 @@ app/
 | `JWT_EXPIRE_MINUTES` | `60` | 1–1440 |
 | `DB_POOL_SIZE`, `DB_MAX_OVERFLOW` | `5`, `5` | Per engine; sum ≤ 20 (each account's `MAX_USER_CONNECTIONS`) |
 | `DB_POOL_RECYCLE_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS` | `1800`, `5` | |
-| `ANTHROPIC_API_KEY` | none | Required for `/api/v1/query` (503 without it); never logged |
-| `ANTHROPIC_MODEL` | `claude-sonnet-5` | Any current Claude model id |
+| `LLM_PROVIDER` | `claude` | `claude` or `ollama`: which `SqlGenerator` drafts the SQL (`.env.example` uses `ollama`) |
+| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | `scheme://host[:port]` only; keep it local |
+| `OLLAMA_MODEL` | `qwen2.5-coder:7b` | Must be pulled (`ollama pull ...`) |
+| `OLLAMA_TIMEOUT_SECONDS`, `OLLAMA_NUM_CTX` | `120`, `8192` | Context ≥ 4096; Ollama silently truncates beyond it |
+| `OLLAMA_TEMPERATURE`, `OLLAMA_MAX_TOKENS` | `0`, `2048` | |
+| `ANTHROPIC_API_KEY` | none | Required for `/api/v1/query` with `LLM_PROVIDER=claude` (503 without it), and then in production; never logged |
+| `ANTHROPIC_MODEL` | `claude-sonnet-5` | Configurable: any Claude model id your Anthropic account can use. The default is a legacy model, still available (Anthropic docs, checked 2026-10-27); `claude-sonnet-5-5` is the current Sonnet |
 | `ANTHROPIC_MAX_TOKENS`, `ANTHROPIC_TIMEOUT_SECONDS`, `ANTHROPIC_MAX_RETRIES` | `16000`, `60`, `1` | |
 | `SQL_MAX_ROWS` | `500` | Every executed query is bounded to this many rows |
 | `SQL_TIMEOUT_MS` | `5000` | MySQL `max_execution_time` per executed query |
@@ -209,7 +217,7 @@ A missing or invalid token gets `401` with `WWW-Authenticate: Bearer`.
 ## Query pipeline (Phase 4)
 
 ```
-question ──► Claude ──► UNTRUSTED SQL ──► validate ──► authorize + row scope + LIMIT
+question ──► LLM ──► UNTRUSTED SQL ──► validate ──► authorize + row scope + LIMIT
           ──► guard (CAIR, Phase 5) ──► askq_reader (read-only) ──► result
 every step ──► query_history / cair_assessments / security_audit_log (askq_app)
 ```
@@ -223,7 +231,12 @@ Conversation history is passed to the model as data to resolve follow-ups
 ("and for year 2?"). It never reaches the authorizer, so context can change
 what is asked but never what is allowed.
 
-**1. Generation (`llm/claude.py`).**
+**1. Generation (`llm/`).** `LLM_PROVIDER` picks the `SqlGenerator`:
+`claude.py` (default) or `ollama.py`. Both send the same prompt
+(`llm/prompt.py`), constrain the answer to the same JSON schema and validate
+it with the same strict model, so everything after generation is identical.
+
+*Claude (`llm/claude.py`):*
 - **Call:** Anthropic SDK, `messages.create` with structured outputs
   (`output_config.format` = JSON schema), which returns `resolved_question`,
   `sql`, `explanation` and `chart`.
@@ -237,6 +250,23 @@ what is asked but never what is allowed.
   for prompt caching.
 - **Scope of the SDK:** the rest of the backend depends only on the
   `SqlGenerator` protocol. Tests replace it; no test calls the API.
+
+*Ollama (`llm/ollama.py`):*
+- **Call:** one non-streaming `POST {OLLAMA_BASE_URL}/api/chat` with
+  `format` = the same JSON schema (Ollama structured outputs), the shared
+  system and user messages, `temperature` 0, `num_ctx` 8192 and `num_predict`
+  as the token bound. No API key; proxy environment variables are ignored and
+  redirects are not followed, so the prompt only goes to the configured server.
+- **Validation of the output:** the same strict Pydantic model; malformed
+  JSON or truncation (`done_reason=length`) is rejected.
+- **Errors:** timeout → `LLM_TIMEOUT`; Ollama not running or model not
+  pulled (404) → `LLM_UNAVAILABLE`; other 4xx → `LLM_REQUEST_ERROR`;
+  other statuses → `LLM_ERROR`. Only the class name or status code is logged.
+- **Tests** use `httpx.MockTransport`; `tests/integration/test_ollama_live.py`
+  calls the real server only with `--ollama`.
+- A 7B local model is less accurate than Claude: expect more questions to
+  end as UNANSWERABLE, REJECTED or FAILED. That never weakens a control,
+  because every check below runs on whatever SQL it returns.
 
 **2. Role-filtered schema (`query/catalog.py`, `policy.py`, `schema_context.py`).**
 The model sees a fixed, application-written description of the 15 tables and
@@ -340,8 +370,8 @@ returned with a safe message and recorded:
 | FAILED | System error at a stage (generation, validation, authorization, CAIR, execution) | FAILED |
 
 All of these are `200` responses carrying the decision. HTTP errors are
-reserved for the request itself: 401/403/404/422, and 503 when Claude or the
-database is not configured.
+reserved for the request itself: 401/403/404/422, and 503 when Claude (with
+`LLM_PROVIDER=claude`) or the database is not configured.
 
 **What a response may contain (Phase 6).** Everything in the body is visible in
 the browser's network inspector, so the response is limited to:
@@ -433,6 +463,7 @@ cd C:\ASKQ\backend
 
 .\.venv\Scripts\python -m pytest                 # unit tests: no .env, no MySQL (SQLite stand-in)
 .\.venv\Scripts\python -m pytest --mysql         # + integration tests against the local MySQL
+.\.venv\Scripts\python -m pytest --ollama        # + live smoke test against the local Ollama model
 .\.venv\Scripts\python -m ruff check ..
 .\.venv\Scripts\python -m ruff format --check ..
 ```
@@ -451,7 +482,7 @@ they insert credentials inside a transaction that is always rolled back, so
   are also removed from every scoped derived table, so `SELECT *` cannot
   reveal them.
 - There is no per-user rate limit on `/api/v1/query` yet, and each question
-  costs one Claude call.
+  costs one model call (Claude or Ollama).
 
 - **Rate limiting and automatic lockout are not implemented yet.** Failed
   attempts are counted and `locked_until` is honoured, but nothing sets it

@@ -10,7 +10,7 @@ CAIR (Conversation-Aware Inference Risk) analysis.
 |---|---|---|
 | Frontend | React 19 + Vite + TypeScript | Presentation only; never makes security decisions ([below](#frontend-phase-6)) |
 | Backend | Python 3.13 + FastAPI | Authentication, pipeline orchestration, all enforcement |
-| LLM | Claude API | Translates questions into candidate SQL (treated as **untrusted**) |
+| LLM | Claude API, or a local Ollama model (`qwen2.5-coder:7b`), chosen by `LLM_PROVIDER` | Translates questions into candidate SQL (treated as **untrusted**, whichever provider) |
 | SQL safety | sqlglot | Parses SQL to an AST; enforces single read-only SELECT |
 | RBAC | Backend policy module | Table/column/aggregate checks; server-side row-scope rewriting |
 | CAIR | `backend/app/cair` | Population probes + per-user knowledge ledger + six inference audits → ALLOW / RESTRICT / BLOCK ([cair.md](cair.md)) |
@@ -27,11 +27,50 @@ Step 5 has two tiers:
 - **STATISTICAL:** university-wide, aggregate-only, and at least k people behind
   every statistic. Offered only while CAIR is enabled.
 
+```mermaid
+flowchart TD
+    U["Browser<br/>React + Vite SPA"] -- "question + JWT" --> AUTH
+
+    subgraph BE["FastAPI backend (all enforcement)"]
+        AUTH["1. Authenticate<br/>JWT → role + scope re-read from DB"]
+        CTX["2. Context<br/>recent conversation turns"]
+        GEN["3. Generate<br/>untrusted SQL"]
+        VAL["4. Validate<br/>sqlglot: one SELECT, allowlist"]
+        AZ["5. Authorize<br/>role tables/columns, row-scope rewrite, LIMIT"]
+        CAIR["6. CAIR guard<br/>ALLOW / RESTRICT / BLOCK"]
+        EXE["7. Execute<br/>read-only, timeout, row cap"]
+        REC["8. Record<br/>history, ledger, audit"]
+        AUTH --> CTX --> GEN --> VAL --> AZ --> CAIR --> EXE --> REC
+    end
+
+    GEN <-- "prompt: question, context,<br/>role-filtered schema" --> LLM["LLM_PROVIDER<br/>Claude API or local Ollama (qwen2.5-coder:7b)"]
+
+    subgraph DB["MySQL 8"]
+        UNI[("askq_university<br/>synthetic org data")]
+        SYS[("askq_system<br/>credentials, history, CAIR ledger, audit")]
+    end
+
+    AUTH -- "askq_app: credentials" --> SYS
+    AUTH -- "askq_app: users, roles, departments" --> UNI
+    CTX -- "askq_app" --> SYS
+    CAIR -- "population probes: askq_reader" --> UNI
+    CAIR -- "ledger window: askq_app" --> SYS
+    EXE -- "askq_reader (SELECT only)" --> UNI
+    REC -- "askq_app" --> SYS
+
+    VAL -. "REJECTED" .-> REC
+    AZ -. "DENIED" .-> REC
+    CAIR -. "BLOCK: nothing runs" .-> REC
+    REC -- "decision, message, rows, chart hint<br/>(never SQL or risk score)" --> U
+```
+
+The same pipeline as text:
+
 ```
 Browser ──JSON + JWT──► FastAPI
   1. Authenticate      verify JWT → user id, role, department/student/teacher scope
   2. Context           load recent conversation turns
-  3. Generate          Claude: question + context + schema visible to this role → SQL text
+  3. Generate          LLM (Claude / Ollama): question + context + schema visible to this role → SQL text
   4. Validate          tokens (no comments / ';'); parse; exactly one SELECT; node
                        and function allowlist; catalog tables only; row LIMIT
   5. Authorize         every table/column/aggregate checked against role policy;

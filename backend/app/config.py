@@ -76,7 +76,12 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = Field(default=60, ge=1, le=1440)
 
-    # ---- Claude (SQL generation) ----
+    # ---- SQL generation: which SqlGenerator answers questions ----
+    # "claude" (Claude API, needs ANTHROPIC_API_KEY) or "ollama" (a local Ollama
+    # server, no key). Either way the generated SQL is untrusted input.
+    llm_provider: Literal["claude", "ollama"] = "claude"
+
+    # ---- Claude (LLM_PROVIDER=claude) ----
     anthropic_api_key: SecretStr | None = None
     # Model id as named in the Claude API. The project default is kept in
     # .env.example; any current model id can be configured.
@@ -84,6 +89,19 @@ class Settings(BaseSettings):
     anthropic_max_tokens: int = Field(default=16000, ge=1024, le=64000)
     anthropic_timeout_seconds: float = Field(default=60.0, ge=5.0, le=600.0)
     anthropic_max_retries: int = Field(default=1, ge=0, le=5)
+
+    # ---- Ollama (LLM_PROVIDER=ollama) ----
+    # scheme://host[:port] of the Ollama server; no path, no credentials.
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = "qwen2.5-coder:7b"
+    # Generous: a local 7B model may first have to load, then runs on CPU/GPU.
+    ollama_timeout_seconds: float = Field(default=120.0, ge=5.0, le=600.0)
+    # Context window. Must hold the system prompt (~2.4k tokens), the
+    # conversation and the answer: Ollama silently truncates beyond it.
+    ollama_num_ctx: int = Field(default=8192, ge=4096, le=131072)
+    # Upper bound on generated tokens (Ollama's num_predict).
+    ollama_max_tokens: int = Field(default=2048, ge=256, le=16384)
+    ollama_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
 
     # ---- Query execution limits (askq_reader) ----
     # Every executed SELECT is bounded to this many rows (a larger LIMIT is capped).
@@ -144,6 +162,10 @@ class Settings(BaseSettings):
             raise ValueError("DB_POOL_SIZE + DB_MAX_OVERFLOW must not exceed 20")
         if not _MODEL_ID.match(self.anthropic_model):
             raise ValueError("ANTHROPIC_MODEL is not a valid model id")
+        if not _MODEL_ID.match(self.ollama_model):
+            raise ValueError("OLLAMA_MODEL is not a valid model id")
+        if not _ORIGIN.match(self.ollama_base_url):
+            raise ValueError("OLLAMA_BASE_URL must be scheme://host[:port]")
 
         origins = self.cors_origin_list
         for origin in origins:
@@ -153,9 +175,15 @@ class Settings(BaseSettings):
                 raise ValueError(f"CORS_ORIGINS entry is not scheme://host[:port]: {origin}")
 
         if self.app_env == "production":
+            # The Anthropic key is only needed when Claude is the provider.
+            required = [
+                name
+                for name in SECRET_FIELDS
+                if name != "anthropic_api_key" or self.llm_provider == "claude"
+            ]
             missing = [
                 name.upper()
-                for name in SECRET_FIELDS
+                for name in required
                 if getattr(self, name) is None or _is_placeholder(getattr(self, name))
             ]
             if missing:

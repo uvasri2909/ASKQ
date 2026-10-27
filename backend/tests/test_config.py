@@ -19,6 +19,9 @@ def test_safe_defaults_without_env_file():
     assert s.jwt_secret is None and s.db_app_password is None and s.db_reader_password is None
     assert s.anthropic_api_key is None
     assert s.anthropic_model == "claude-sonnet-5"
+    assert s.llm_provider == "claude"
+    assert (s.ollama_base_url, s.ollama_model) == ("http://127.0.0.1:11434", "qwen2.5-coder:7b")
+    assert (s.ollama_timeout_seconds, s.ollama_num_ctx, s.ollama_temperature) == (120, 8192, 0)
     assert (s.sql_max_rows, s.sql_timeout_ms) == (500, 5000)
 
 
@@ -80,6 +83,42 @@ def test_production_requires_every_secret():
     assert "ANTHROPIC_API_KEY" in message
 
 
+def test_production_with_ollama_does_not_require_an_anthropic_key():
+    s = make_settings(
+        app_env="production",
+        cors_origins="https://askq.example",
+        llm_provider="ollama",
+        anthropic_api_key=None,
+    )
+    assert s.is_production and s.llm_provider == "ollama"
+
+
+def test_production_with_ollama_still_requires_the_other_secrets():
+    with pytest.raises(ValidationError) as info:
+        make_settings(
+            app_env="production",
+            cors_origins="https://askq.example",
+            llm_provider="ollama",
+            anthropic_api_key=None,
+            jwt_secret=None,
+        )
+    message = str(info.value)
+    assert "JWT_SECRET" in message and "ANTHROPIC_API_KEY" not in message
+
+
+def test_loads_ollama_settings_from_env(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text(
+        "LLM_PROVIDER=ollama\nOLLAMA_BASE_URL=http://127.0.0.1:11434\n"
+        "OLLAMA_MODEL=qwen2.5-coder:7b\nOLLAMA_TIMEOUT_SECONDS=120\n"
+        "OLLAMA_NUM_CTX=8192\nOLLAMA_TEMPERATURE=0\n",
+        encoding="utf-8",
+    )
+    s = Settings(_env_file=env)
+    assert s.llm_provider == "ollama" and s.ollama_model == "qwen2.5-coder:7b"
+    assert s.anthropic_api_key is None
+
+
 def test_production_requires_explicit_cors():
     with pytest.raises(ValidationError, match="CORS_ORIGINS"):
         make_settings(app_env="production")
@@ -109,6 +148,15 @@ def test_production_requires_explicit_cors():
         ({"sql_max_rows": 100_000}, "sql_max_rows"),
         ({"sql_timeout_ms": 10}, "sql_timeout_ms"),
         ({"anthropic_timeout_seconds": 1}, "anthropic_timeout_seconds"),
+        ({"llm_provider": "openai"}, "llm_provider"),
+        ({"ollama_model": "qwen; rm -rf"}, "OLLAMA_MODEL"),
+        ({"ollama_base_url": "127.0.0.1:11434"}, "OLLAMA_BASE_URL"),
+        ({"ollama_base_url": "http://127.0.0.1:11434/api"}, "OLLAMA_BASE_URL"),
+        ({"ollama_base_url": "http://user:pw@127.0.0.1:11434"}, "OLLAMA_BASE_URL"),
+        ({"ollama_base_url": "file:///etc/passwd"}, "OLLAMA_BASE_URL"),
+        ({"ollama_timeout_seconds": 1}, "ollama_timeout_seconds"),
+        ({"ollama_num_ctx": 2048}, "ollama_num_ctx"),
+        ({"ollama_temperature": -1}, "ollama_temperature"),
     ],
 )
 def test_invalid_configuration_rejected(overrides, fragment):

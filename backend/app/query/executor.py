@@ -26,6 +26,12 @@ logger = logging.getLogger(__name__)
 # MySQL error numbers
 _TIMEOUT = 3024  # ER_QUERY_TIMEOUT (max_execution_time exceeded)
 _ACCESS_DENIED = (1142, 1143, 1044, 1227)
+# Errors whose message names only schema objects (columns, tables, functions),
+# never row values, e.g. 1054 "Unknown column 'c.x' in 'on clause'". Their text
+# is logged at DEBUG for diagnosis. Others are logged by number only: some quote
+# data (1292 "Truncated incorrect DOUBLE value: '<value>'") or the account (1142).
+_IDENTIFIER_ONLY_ERRORS = frozenset({1052, 1054, 1055, 1146, 1248, 1305})
+_MAX_LOGGED_MESSAGE = 300
 
 
 class ExecutionCode:
@@ -74,6 +80,14 @@ def to_json_value(value: Any) -> Any:
     return value
 
 
+def _safe_message(exc: DBAPIError, number: Any) -> str:
+    """MySQL's message for identifier-only errors, on one line; else withheld."""
+    args = exc.orig.args if exc.orig is not None else ()
+    if number not in _IDENTIFIER_ONLY_ERRORS or len(args) < 2:
+        return "(message withheld)"
+    return " ".join(str(args[1]).split())[:_MAX_LOGGED_MESSAGE]
+
+
 class ReaderExecutor:
     def __init__(self, database: Database, *, timeout_ms: int, max_rows: int) -> None:
         self._database = database
@@ -110,6 +124,7 @@ class ReaderExecutor:
             else:
                 code = ExecutionCode.EXECUTION_ERROR
             logger.warning("query execution failed: %s (mysql error %s)", code, number)
+            logger.debug("mysql error %s: %s", number, _safe_message(exc, number))
             raise QueryExecutionError(code, elapsed()) from None
         except SQLAlchemyError as exc:
             logger.warning("query execution failed: %s", type(exc).__name__)

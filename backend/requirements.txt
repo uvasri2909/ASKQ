@@ -17,8 +17,12 @@ cryptography==50.0.1
 # SQL parsing / validation (used from Phase 5 onward)
 sqlglot==30.19.0
 
-# Claude API (used from Phase 6 onward)
+# Claude API (used from Phase 6 onward; LLM_PROVIDER=claude)
 anthropic==1.8.0
+
+# HTTP client for a local Ollama server (LLM_PROVIDER=ollama); already pinned
+# in requirements.lock
+httpx==0.28.1
 
 # Auth (used from Phase 4 onward)
 pyjwt==2.15.0
